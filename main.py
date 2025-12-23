@@ -281,6 +281,7 @@ async def send_or_edit_message(
             )
     except RetryAfter as exc:
         chat_state["backoff_until"] = time.time() + exc.retry_after + 1
+        logging.warning("Chat %s: backoff %s sec (edit)", chat_id, exc.retry_after)
         logging.warning(
             "Chat %s: backoff %s sec (edit)", chat_id, exc.retry_after
         )
