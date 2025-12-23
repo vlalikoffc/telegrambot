@@ -30,10 +30,8 @@ PROCESS_ALIASES = {
     "code.exe": "vscode",
     "telegram.exe": "telegram",
     "cs2.exe": "cs2",
-    "csgo.exe": "cs2",
-    "valorant.exe": "game",
-    "dota2.exe": "game",
-    "gta5.exe": "game",
+    "steam.exe": "steam",
+    "discord.exe": "discord",
 }
 
 DISPLAY_NAMES = {
@@ -41,9 +39,15 @@ DISPLAY_NAMES = {
     "browser": "Браузер",
     "vscode": "VS Code",
     "telegram": "Telegram",
-    "cs2": "CS2",
-    "game": "Игра",
+    "cs2": "Counter-Strike 2",
+    "steam": "Steam",
+    "discord": "Discord",
     "unknown": "Unknown",
+}
+
+BROWSER_PROCESS_NAMES = {
+    "msedge.exe": "Edge",
+    "firefox.exe": "Firefox",
 }
 
 TAGLINES = {
@@ -52,7 +56,8 @@ TAGLINES = {
     "vscode": "страдаю хернёй (программирую)",
     "telegram": "залип в телеге",
     "cs2": "бегу на B",
-    "game": "потею в катке",
+    "steam": "катаю через Steam",
+    "discord": "залип в дискорде",
     "default": "живу жизнь",
 }
 
@@ -130,6 +135,10 @@ def resolve_app_key(process_name: str) -> str:
 
 def resolve_display_name(app_key: str, process_name: str) -> str:
     if app_key != "unknown":
+        if app_key == "browser":
+            lower_name = process_name.lower()
+            if lower_name in BROWSER_PROCESS_NAMES:
+                return BROWSER_PROCESS_NAMES[lower_name]
         return DISPLAY_NAMES.get(app_key, process_name)
     if process_name:
         return process_name.replace(".exe", "").strip() or "Unknown"
@@ -217,18 +226,22 @@ async def send_or_edit_message(
         logging.exception("Unexpected error for chat %s: %s", chat_id, exc)
 
 
-async def update_live_status(context: ContextTypes.DEFAULT_TYPE) -> None:
-    state = context.application.bot_data.get("state")
+async def update_live_status_for_app(app: Application) -> None:
+    state = app.bot_data.get("state")
     if state is None:
         return
     text = build_status_text()
     for chat_id_str, chat_state in state.get("chats", {}).items():
         if not chat_state.get("enabled"):
             continue
-        await send_or_edit_message(
-            context.application, int(chat_id_str), chat_state, text
-        )
+        await send_or_edit_message(app, int(chat_id_str), chat_state, text)
     await save_state(state)
+
+
+async def live_update_loop(app: Application) -> None:
+    while True:
+        await update_live_status_for_app(app)
+        await asyncio.sleep(1)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -274,6 +287,7 @@ async def bootstrap_default_chat(app: Application, default_chat_id: Optional[str
 async def on_startup(app: Application) -> None:
     default_chat_id = os.getenv("DEFAULT_CHAT_ID")
     await bootstrap_default_chat(app, default_chat_id)
+    app.create_task(live_update_loop(app))
 
 
 def main() -> None:
@@ -295,11 +309,6 @@ def main() -> None:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CommandHandler("status", handle_status))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    if application.job_queue is None:
-        raise RuntimeError("JobQueue is not available. Install python-telegram-bot[job-queue].")
-
-    application.job_queue.run_repeating(update_live_status, interval=1, first=1)
 
     application.run_polling()
 
