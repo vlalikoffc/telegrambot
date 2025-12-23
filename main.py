@@ -190,9 +190,17 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "message_id": None,
             "last_sent_text": None,
             "backoff_until": None,
+            "message_ids": [],
+            "chat_type": None,
         },
     )
     return chat_state
+
+
+def record_message_id(chat_state: Dict[str, Any], message_id: int) -> None:
+    message_ids = chat_state.setdefault("message_ids", [])
+    if message_id not in message_ids:
+        message_ids.append(message_id)
 
 
 async def send_or_edit_message(
@@ -215,6 +223,7 @@ async def send_or_edit_message(
         else:
             message = await app.bot.send_message(chat_id=chat_id, text=text)
             chat_state["message_id"] = message.message_id
+            record_message_id(chat_state, message.message_id)
         chat_state["last_sent_text"] = text
         chat_state["backoff_until"] = None
     except RetryAfter as exc:
@@ -244,12 +253,62 @@ async def live_update_loop(app: Application) -> None:
         await asyncio.sleep(1)
 
 
+async def delete_bot_messages(app: Application, chat_id: int, message_ids: list[int]) -> None:
+    for message_id in message_ids:
+        try:
+            await app.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramError as exc:
+            logging.warning(
+                "Failed to delete message %s in chat %s: %s", message_id, chat_id, exc
+            )
+        except Exception as exc:
+            logging.warning(
+                "Unexpected error while deleting message %s in chat %s: %s",
+                message_id,
+                chat_id,
+                exc,
+            )
+
+
+async def send_and_pin_status_message(
+    app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+) -> None:
+    try:
+        message = await app.bot.send_message(chat_id=chat_id, text=text)
+        chat_state["message_id"] = message.message_id
+        chat_state["last_sent_text"] = text
+        chat_state["backoff_until"] = None
+        chat_state["message_ids"] = []
+        record_message_id(chat_state, message.message_id)
+        try:
+            await app.bot.pin_chat_message(chat_id=chat_id, message_id=message.message_id)
+        except TelegramError as exc:
+            logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
+    except RetryAfter as exc:
+        chat_state["backoff_until"] = time.time() + exc.retry_after
+        logging.warning("Rate limited for chat %s, backing off %s sec", chat_id, exc.retry_after)
+    except TelegramError as exc:
+        logging.exception("Telegram error for chat %s: %s", chat_id, exc)
+    except Exception as exc:
+        logging.exception("Unexpected error for chat %s: %s", chat_id, exc)
+
+
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat is None:
         return
     chat_id = update.effective_chat.id
     state = context.application.bot_data["state"]
     chat_state = ensure_chat_state(state, chat_id)
+    chat_state["chat_type"] = update.effective_chat.type
+    chat_state["enabled"] = True
+    text = build_status_text()
+    if update.effective_chat.type == "private":
+        message_ids = chat_state.get("message_ids", [])
+        if message_ids:
+            await delete_bot_messages(context.application, chat_id, message_ids)
+        await send_and_pin_status_message(context.application, chat_id, chat_state, text)
+    else:
+        await send_or_edit_message(context.application, chat_id, chat_state, text)
     chat_state["enabled"] = True
     text = build_status_text()
     await send_or_edit_message(context.application, chat_id, chat_state, text)
@@ -261,6 +320,13 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     chat_id = update.effective_chat.id
     text = build_status_text()
+    message = await context.application.bot.send_message(chat_id=chat_id, text=text)
+    state = context.application.bot_data["state"]
+    chat_state = ensure_chat_state(state, chat_id)
+    chat_state["chat_type"] = update.effective_chat.type
+    if update.effective_chat.type == "private":
+        record_message_id(chat_state, message.message_id)
+        await save_state(state)
     await context.application.bot.send_message(chat_id=chat_id, text=text)
 
 
@@ -284,6 +350,37 @@ async def bootstrap_default_chat(app: Application, default_chat_id: Optional[str
     await save_state(state)
 
 
+async def cleanup_private_chats_on_startup(app: Application) -> None:
+    state = app.bot_data.get("state")
+    if state is None:
+        return
+    for chat_id_str, chat_state in state.get("chats", {}).items():
+        if not chat_state.get("enabled"):
+            continue
+        chat_id = int(chat_id_str)
+        chat_type = chat_state.get("chat_type")
+        if not chat_type:
+            try:
+                chat = await app.bot.get_chat(chat_id)
+                chat_type = chat.type
+                chat_state["chat_type"] = chat_type
+            except TelegramError as exc:
+                logging.warning("Failed to fetch chat info for %s: %s", chat_id, exc)
+                continue
+        if chat_type != "private":
+            continue
+        message_ids = chat_state.get("message_ids", [])
+        if message_ids:
+            await delete_bot_messages(app, chat_id, message_ids)
+        text = build_status_text()
+        await send_and_pin_status_message(app, chat_id, chat_state, text)
+    await save_state(state)
+
+
+async def on_startup(app: Application) -> None:
+    default_chat_id = os.getenv("DEFAULT_CHAT_ID")
+    await bootstrap_default_chat(app, default_chat_id)
+    await cleanup_private_chats_on_startup(app)
 async def on_startup(app: Application) -> None:
     default_chat_id = os.getenv("DEFAULT_CHAT_ID")
     await bootstrap_default_chat(app, default_chat_id)
