@@ -18,6 +18,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 STATE_FILE = Path(__file__).with_name("state.json")
 STATE_LOCK = asyncio.Lock()
+LOG_FILE = Path(__file__).with_name("bot.log")
 
 FOOTER_TEXT = (
     "вот чё я делаю, но не следите пж за мной 24/7(мой юз в тг @vlalikoffc)"
@@ -203,6 +204,53 @@ def record_message_id(chat_state: Dict[str, Any], message_id: int) -> None:
         message_ids.append(message_id)
 
 
+async def send_or_reset_status_message(
+    app: Application,
+    chat_id: int,
+    chat_state: Dict[str, Any],
+    text: str,
+    *,
+    pin: bool = False,
+) -> None:
+    try:
+        message = await app.bot.send_message(chat_id=chat_id, text=text)
+        chat_state["message_id"] = message.message_id
+        chat_state["last_sent_text"] = None
+        chat_state["backoff_until"] = None
+        chat_state["message_ids"] = []
+        record_message_id(chat_state, message.message_id)
+        if pin:
+            try:
+                await app.bot.pin_chat_message(chat_id=chat_id, message_id=message.message_id)
+            except TelegramError as exc:
+                logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
+        logging.info("Chat %s: recreated message %s", chat_id, message.message_id)
+    except RetryAfter as exc:
+        chat_state["backoff_until"] = time.time() + exc.retry_after + 1
+        logging.warning(
+            "Chat %s: backoff %s sec (send)", chat_id, exc.retry_after
+        )
+    except TelegramError as exc:
+        logging.exception("Telegram error for chat %s on send: %s", chat_id, exc)
+    except Exception as exc:
+        logging.exception("Unexpected error for chat %s on send: %s", chat_id, exc)
+
+
+async def update_status_for_chat(
+    app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+) -> None:
+    logging.info("Chat %s: tick", chat_id)
+    now = time.time()
+    backoff_until = chat_state.get("backoff_until")
+    if backoff_until and now < backoff_until:
+        remaining = max(0, int(backoff_until - now))
+        logging.info("Chat %s: backoff %s sec", chat_id, remaining)
+        return
+    if chat_state.get("last_sent_text") == text:
+        logging.info("Chat %s: skip unchanged", chat_id)
+        return
+    message_id = chat_state.get("message_id")
+    try:
 async def send_or_edit_message(
     app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
 ) -> None:
@@ -220,6 +268,40 @@ async def send_or_edit_message(
                 message_id=message_id,
                 text=text,
             )
+            chat_state["last_sent_text"] = text
+            chat_state["backoff_until"] = None
+            logging.info("Chat %s: edited ok", chat_id)
+        else:
+            await send_or_reset_status_message(
+                app,
+                chat_id,
+                chat_state,
+                text,
+                pin=chat_state.get("chat_type") == "private",
+            )
+    except RetryAfter as exc:
+        chat_state["backoff_until"] = time.time() + exc.retry_after + 1
+        logging.warning(
+            "Chat %s: backoff %s sec (edit)", chat_id, exc.retry_after
+        )
+    except TelegramError as exc:
+        logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
+        await send_or_reset_status_message(
+            app,
+            chat_id,
+            chat_state,
+            text,
+            pin=chat_state.get("chat_type") == "private",
+        )
+    except Exception as exc:
+        logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
+        await send_or_reset_status_message(
+            app,
+            chat_id,
+            chat_state,
+            text,
+            pin=chat_state.get("chat_type") == "private",
+        )
         else:
             message = await app.bot.send_message(chat_id=chat_id, text=text)
             chat_state["message_id"] = message.message_id
@@ -239,6 +321,20 @@ async def update_live_status_for_app(app: Application) -> None:
     state = app.bot_data.get("state")
     if state is None:
         return
+    try:
+        text = build_status_text()
+    except Exception as exc:
+        logging.exception("Failed to build status text: %s", exc)
+        return
+    for chat_id_str, chat_state in state.get("chats", {}).items():
+        if not chat_state.get("enabled"):
+            continue
+        chat_id = int(chat_id_str)
+        try:
+            await update_status_for_chat(app, chat_id, chat_state, text)
+        except Exception as exc:
+            logging.exception("Chat %s: loop error: %s", chat_id, exc)
+            continue
     text = build_status_text()
     for chat_id_str, chat_state in state.get("chats", {}).items():
         if not chat_state.get("enabled"):
@@ -248,6 +344,12 @@ async def update_live_status_for_app(app: Application) -> None:
 
 
 async def live_update_loop(app: Application) -> None:
+    logging.info("Live update loop started")
+    while True:
+        try:
+            await update_live_status_for_app(app)
+        except Exception as exc:
+            logging.exception("Live update loop error: %s", exc)
     while True:
         await update_live_status_for_app(app)
         await asyncio.sleep(1)
@@ -276,6 +378,7 @@ async def send_and_pin_status_message(
     try:
         message = await app.bot.send_message(chat_id=chat_id, text=text)
         chat_state["message_id"] = message.message_id
+        chat_state["last_sent_text"] = None
         chat_state["last_sent_text"] = text
         chat_state["backoff_until"] = None
         chat_state["message_ids"] = []
@@ -308,6 +411,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await delete_bot_messages(context.application, chat_id, message_ids)
         await send_and_pin_status_message(context.application, chat_id, chat_state, text)
     else:
+        await send_or_reset_status_message(context.application, chat_id, chat_state, text)
         await send_or_edit_message(context.application, chat_id, chat_state, text)
     chat_state["enabled"] = True
     text = build_status_text()
@@ -346,6 +450,7 @@ async def bootstrap_default_chat(app: Application, default_chat_id: Optional[str
     chat_state = ensure_chat_state(state, chat_id)
     chat_state["enabled"] = True
     text = build_status_text()
+    await send_or_reset_status_message(app, chat_id, chat_state, text)
     await send_or_edit_message(app, chat_id, chat_state, text)
     await save_state(state)
 
@@ -392,6 +497,7 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
     )
 
     token = os.getenv("BOT_TOKEN")
