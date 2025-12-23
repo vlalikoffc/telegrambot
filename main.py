@@ -309,6 +309,9 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await send_and_pin_status_message(context.application, chat_id, chat_state, text)
     else:
         await send_or_edit_message(context.application, chat_id, chat_state, text)
+    chat_state["enabled"] = True
+    text = build_status_text()
+    await send_or_edit_message(context.application, chat_id, chat_state, text)
     await save_state(state)
 
 
@@ -324,6 +327,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_chat.type == "private":
         record_message_id(chat_state, message.message_id)
         await save_state(state)
+    await context.application.bot.send_message(chat_id=chat_id, text=text)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -377,6 +381,9 @@ async def on_startup(app: Application) -> None:
     default_chat_id = os.getenv("DEFAULT_CHAT_ID")
     await bootstrap_default_chat(app, default_chat_id)
     await cleanup_private_chats_on_startup(app)
+async def on_startup(app: Application) -> None:
+    default_chat_id = os.getenv("DEFAULT_CHAT_ID")
+    await bootstrap_default_chat(app, default_chat_id)
     app.create_task(live_update_loop(app))
 
 
