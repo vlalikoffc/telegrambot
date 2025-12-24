@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
@@ -70,6 +71,9 @@ TAGLINES = {
     "default": "живу жизнь",
 }
 
+PYTHON_PROCESS_NAMES = {"python.exe", "python3.exe"}
+JS_PROCESS_NAMES = {"node.exe", "nodejs.exe", "npm.cmd", "yarn.cmd", "pnpm.cmd"}
+
 FAVORITE_APPS = {
     "minecraft": {"process_names": {"java.exe", "javaw.exe"}, "display": "Minecraft"},
     "browser": {"process_names": set(BROWSER_PROCESS_NAMES), "display": "Браузер"},
@@ -89,6 +93,20 @@ PRESENCE_THRESHOLD_SECONDS = 300
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return str(timedelta(seconds=seconds))
+
+
+def _format_presence_duration(seconds: float, with_suffix: bool = False) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "только что" if with_suffix else "только что"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} мин" + (" назад" if with_suffix else "")
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if remaining_minutes:
+        return f"{hours} ч {remaining_minutes} мин" + (" назад" if with_suffix else "")
+    return f"{hours} ч" + (" назад" if with_suffix else "")
 
 
 def resolve_app_key(process_name: Optional[str]) -> str:
@@ -202,6 +220,30 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
     return [item["line"] for item in entries]
 
 
+def _detect_work_languages(current_pid: int) -> List[str]:
+    has_python = False
+    has_js = False
+    for proc in list_running_processes():
+        name = (proc.get("name") or "").lower()
+        if not name:
+            continue
+        pid = proc.get("pid")
+        if pid == current_pid:
+            continue
+        if name in PYTHON_PROCESS_NAMES:
+            has_python = True
+            continue
+        if name in JS_PROCESS_NAMES:
+            has_js = True
+            continue
+    languages: List[str] = []
+    if has_python:
+        languages.append("Python")
+    if has_js:
+        languages.append("JavaScript")
+    return languages
+
+
 def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> str:
     uptime_seconds = get_system_uptime_seconds()
     process_info = get_active_process_info()
@@ -234,11 +276,17 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
         parts.append(f"🔢 Процессов: {process_count}")
 
     idle_seconds = get_last_input_idle_seconds()
-    is_present = True if idle_seconds is None else idle_seconds < PRESENCE_THRESHOLD_SECONDS
-    if is_present:
+    if idle_seconds is None:
         parts.append("🟢 За компьютером: я здесь")
+    elif idle_seconds < PRESENCE_THRESHOLD_SECONDS:
+        parts.append(
+            f"🟢 За компьютером: я здесь (последний ввод {_format_presence_duration(idle_seconds, with_suffix=True)})"
+        )
     else:
-        parts.append("💤 За компьютером: отошёл")
+        afk_seconds = idle_seconds - PRESENCE_THRESHOLD_SECONDS
+        parts.append(
+            f"💤 За компьютером: отошёл ({_format_presence_duration(afk_seconds)})"
+        )
 
     running_apps = _collect_running_apps()
     favorite_lines = _favorite_entries(state, app_key, running_apps)
@@ -247,6 +295,13 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
     parts.append("")
     parts.append("Избранные программы")
     parts.extend(favorite_lines)
+
+    work_languages = _detect_work_languages(os.getpid())
+    if work_languages:
+        parts.append("")
+        parts.append("🧑‍💻 Сейчас работаю:")
+        for lang in work_languages:
+            parts.append(f"• {lang}")
 
     parts.append("")
     parts.append(FOOTER_TEXT)
