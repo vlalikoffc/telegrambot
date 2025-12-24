@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
@@ -69,6 +70,9 @@ TAGLINES = {
     "minecraft": "копаюсь в кубах",
     "default": "живу жизнь",
 }
+
+PYTHON_PROCESS_NAMES = {"python.exe", "python3.exe"}
+JS_PROCESS_NAMES = {"node.exe", "nodejs.exe", "npm.cmd", "yarn.cmd", "pnpm.cmd"}
 
 FAVORITE_APPS = {
     "minecraft": {"process_names": {"java.exe", "javaw.exe"}, "display": "Minecraft"},
@@ -216,6 +220,30 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
     return [item["line"] for item in entries]
 
 
+def _detect_work_languages(current_pid: int) -> List[str]:
+    has_python = False
+    has_js = False
+    for proc in list_running_processes():
+        name = (proc.get("name") or "").lower()
+        if not name:
+            continue
+        pid = proc.get("pid")
+        if pid == current_pid:
+            continue
+        if name in PYTHON_PROCESS_NAMES:
+            has_python = True
+            continue
+        if name in JS_PROCESS_NAMES:
+            has_js = True
+            continue
+    languages: List[str] = []
+    if has_python:
+        languages.append("Python")
+    if has_js:
+        languages.append("JavaScript")
+    return languages
+
+
 def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> str:
     uptime_seconds = get_system_uptime_seconds()
     process_info = get_active_process_info()
@@ -267,6 +295,13 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
     parts.append("")
     parts.append("Избранные программы")
     parts.extend(favorite_lines)
+
+    work_languages = _detect_work_languages(os.getpid())
+    if work_languages:
+        parts.append("")
+        parts.append("🧑‍💻 Сейчас работаю:")
+        for lang in work_languages:
+            parts.append(f"• {lang}")
 
     parts.append("")
     parts.append(FOOTER_TEXT)
