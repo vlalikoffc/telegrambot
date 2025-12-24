@@ -42,10 +42,11 @@ async def send_and_pin_status_message(
         chat_state["backoff_until"] = None
         chat_state["message_ids"] = []
         record_message_id(chat_state, message.message_id)
-        try:
-            await app.bot.pin_chat_message(chat_id=chat_id, message_id=message.message_id)
-        except TelegramError as exc:
-            logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
+        if chat_state.get("chat_type") == "private":
+            try:
+                await app.bot.pin_chat_message(chat_id=chat_id, message_id=message.message_id)
+            except TelegramError as exc:
+                logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
         logging.info("Chat %s: recreated message %s", chat_id, message.message_id)
     except RetryAfter as exc:
         _set_backoff(chat_state, exc.retry_after, "send", chat_id)

@@ -28,7 +28,7 @@ async def update_live_status_for_app(app: Application) -> None:
     if state is None:
         return
     try:
-        text = build_status_text()
+        text = build_status_text(state)
     except Exception as exc:
         logging.exception("Failed to build status text: %s", exc)
         return

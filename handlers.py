@@ -31,12 +31,17 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_state = ensure_chat_state(state, chat_id)
     chat_state["chat_type"] = update.effective_chat.type
     chat_state["enabled"] = True
-    text = build_status_text()
+    text = build_status_text(state)
 
     if update.effective_chat.type == "private":
+        message_id = chat_state.get("message_id")
+        if message_id:
+            record_message_id(chat_state, message_id)
         message_ids = chat_state.get("message_ids", [])
         if message_ids:
             await delete_bot_messages(context.application, chat_id, message_ids)
+        chat_state["message_ids"] = []
+        chat_state["message_id"] = None
         await send_and_pin_status_message(context.application, chat_id, chat_state, text)
     else:
         await send_or_edit_status_message(context.application, chat_id, chat_state, text)
@@ -56,7 +61,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _can_reply(chat_state):
         return
 
-    text = build_status_text()
+    text = build_status_text(state)
     message = await context.application.bot.send_message(chat_id=chat_id, text=text)
     if update.effective_chat.type == "private":
         record_message_id(chat_state, message.message_id)
@@ -75,7 +80,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _can_reply(chat_state):
         return
 
-    text = build_status_text()
+    text = build_status_text(state)
     await send_or_edit_status_message(context.application, chat_id, chat_state, text)
     _mark_replied(chat_state)
     await save_state(state)
@@ -100,9 +105,15 @@ async def cleanup_private_chats_on_startup(app: Application) -> None:
                 continue
         if chat_type != "private":
             continue
+        message_id = chat_state.get("message_id")
+        if message_id:
+            record_message_id(chat_state, message_id)
         message_ids = chat_state.get("message_ids", [])
         if message_ids:
             await delete_bot_messages(app, chat_id, message_ids)
-        text = build_status_text()
+        chat_state["message_ids"] = []
+        chat_state["message_id"] = None
+        chat_state["last_sent_text"] = None
+        text = build_status_text(state)
         await send_and_pin_status_message(app, chat_id, chat_state, text)
     await save_state(state)
