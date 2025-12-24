@@ -12,15 +12,22 @@ from state import record_message_id
 
 class RateLimiter:
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+        self._locks: Dict[str, asyncio.Lock] = {}
         self._last_times: Dict[str, float] = {}
 
-    async def wait(self, action: str, min_interval: float) -> None:
-        async with self._lock:
+    def _get_lock(self, key: str) -> asyncio.Lock:
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
+        return self._locks[key]
+
+    async def wait(self, action: str, min_interval: float, scope: Optional[str] = None) -> None:
+        key = f"{action}:{scope or 'global'}"
+        lock = self._get_lock(key)
+        async with lock:
             now = time.monotonic()
-            last = self._last_times.get(action, 0.0)
+            last = self._last_times.get(key, 0.0)
             allowed_at = max(last + min_interval, now)
-            self._last_times[action] = allowed_at
+            self._last_times[key] = allowed_at
         delay = allowed_at - now
         if delay > 0:
             await asyncio.sleep(delay)
@@ -42,7 +49,7 @@ async def delete_bot_messages(
 
 
 async def _delete_message(app: Application, chat_id: int, message_id: int) -> None:
-    await RATE_LIMITER.wait("delete", 2.0)
+    await RATE_LIMITER.wait("delete", 2.0, scope=str(chat_id))
     try:
         await app.bot.delete_message(chat_id=chat_id, message_id=message_id)
     except TelegramError as exc:
@@ -72,7 +79,7 @@ async def send_and_pin_status_message(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> None:
     try:
-        await RATE_LIMITER.wait("send", 2.0)
+        await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
         message = await app.bot.send_message(
             chat_id=chat_id, text=text, reply_markup=reply_markup
         )
@@ -127,7 +134,7 @@ async def send_or_edit_status_message(
             return
 
         try:
-            await RATE_LIMITER.wait("edit", 5.0)
+            await RATE_LIMITER.wait("edit", 5.0, scope=str(chat_id))
             await app.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -159,7 +166,7 @@ async def send_status_reply_message(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> Optional[int]:
     try:
-        await RATE_LIMITER.wait("send", 2.0)
+        await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
         message = await app.bot.send_message(
             chat_id=chat_id, text=text, reply_markup=reply_markup
         )
@@ -193,7 +200,7 @@ async def purge_chat_history(
 
     probe_message_id: Optional[int] = None
     try:
-        await RATE_LIMITER.wait("send", 2.0)
+        await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
         probe = await app.bot.send_message(
             chat_id=chat_id, text="\u2060", disable_notification=True
         )
