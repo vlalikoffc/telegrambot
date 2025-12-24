@@ -11,9 +11,14 @@ from messages import (
     purge_chat_history,
     send_and_pin_status_message,
     send_or_edit_status_message,
-    send_status_reply_message,
 )
-from state import active_viewers, ensure_chat_state, prune_expired_viewers, record_message_id, save_state
+from state import (
+    active_viewer_count_global,
+    ensure_chat_state,
+    prune_expired_viewers,
+    record_message_id,
+    save_state,
+)
 from status import HIDDEN_STATUS_TEXT, build_status_text
 
 ANTISPAM_SECONDS = 10
@@ -72,27 +77,6 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await save_state(state)
 
 
-async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat is None:
-        return
-    chat_id = update.effective_chat.id
-    state = context.application.bot_data["state"]
-    chat_state = ensure_chat_state(state, chat_id)
-    chat_state["chat_type"] = update.effective_chat.type
-    chat_state["enabled"] = True
-
-    if not _can_reply(chat_state):
-        return
-
-    active = active_viewers(chat_state)
-    text = build_status_text(state, active_viewer_count=len(active))
-    await send_status_reply_message(
-        context.application, chat_id, chat_state, text, reply_markup=get_status_keyboard()
-    )
-    _mark_replied(chat_state)
-    await save_state(state)
-
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat is None:
         return
@@ -142,13 +126,13 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
     chat_state["status_visible"] = True
     chat_state["enabled"] = True
 
-    text = build_status_text(state, active_viewer_count=len(active_viewers(chat_state)))
+    text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
     await send_or_edit_status_message(
         context.application,
         chat_id,
         chat_state,
         text,
-        reply_markup=get_status_keyboard(),
+        reply_markup=None,
     )
     await save_state(state)
 
