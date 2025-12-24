@@ -15,10 +15,20 @@ from windows import (
 
 FOOTER_TEXT = "вот чё я делаю, но не следите пж за мной 24/7(мой юз в тг @vlalikoffc)"
 
+BROWSER_PROCESS_NAMES = {
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "chromium.exe",
+    "supermium.exe",
+    "brave.exe",
+    "bravebrowser.exe",
+    "opera.exe",
+    "opera_gx.exe",
+}
+
 PROCESS_ALIASES: Dict[str, str] = {
-    "chrome.exe": "chrome",
-    "msedge.exe": "browser",
-    "firefox.exe": "browser",
+    **{name: "browser" for name in BROWSER_PROCESS_NAMES},
     "code.exe": "vscode",
     "telegram.exe": "telegram",
     "cs2.exe": "cs2",
@@ -33,7 +43,6 @@ PROCESS_ALIASES: Dict[str, str] = {
 }
 
 DISPLAY_NAMES = {
-    "chrome": "Chrome",
     "browser": "Браузер",
     "vscode": "VS Code",
     "telegram": "Telegram",
@@ -46,13 +55,7 @@ DISPLAY_NAMES = {
     "unknown": "Unknown",
 }
 
-BROWSER_PROCESS_NAMES = {
-    "msedge.exe": "Edge",
-    "firefox.exe": "Firefox",
-}
-
 TAGLINES = {
-    "chrome": "сижу просто так в интернете",
     "browser": "сижу просто так в интернете",
     "vscode": "страдаю хернёй (программирую)",
     "telegram": "залип в телеге",
@@ -67,8 +70,7 @@ TAGLINES = {
 
 FAVORITE_APPS = {
     "minecraft": {"process_names": {"java.exe", "javaw.exe"}, "display": "Minecraft"},
-    "chrome": {"process_names": {"chrome.exe"}, "display": "Chrome"},
-    "browser": {"process_names": {"msedge.exe", "firefox.exe"}, "display": "Браузер"},
+    "browser": {"process_names": set(BROWSER_PROCESS_NAMES), "display": "Браузер"},
     "telegram": {"process_names": {"telegram.exe"}, "display": "Telegram"},
     "discord": {"process_names": {"discord.exe"}, "display": "Discord"},
     "spotify": {"process_names": {"spotify.exe"}, "display": "Spotify"},
@@ -96,11 +98,9 @@ def resolve_app_key(process_name: Optional[str]) -> str:
 def resolve_display_name(app_key: str, process_name: Optional[str], title: Optional[str] = None) -> str:
     if app_key == "minecraft" and title:
         return title
+    if app_key == "browser":
+        return DISPLAY_NAMES["browser"]
     if app_key != "unknown":
-        if app_key == "browser" and process_name:
-            lower_name = process_name.lower()
-            if lower_name in BROWSER_PROCESS_NAMES:
-                return BROWSER_PROCESS_NAMES[lower_name]
         return DISPLAY_NAMES.get(app_key, process_name or "Unknown")
     if process_name:
         return process_name.replace(".exe", "").strip() or "Unknown"
@@ -155,7 +155,7 @@ def _collect_running_apps() -> Dict[str, Dict[str, Any]]:
 def _update_activity(state: Dict[str, Any], app_key: str, title: Optional[str]) -> None:
     app_state = ensure_app_state(state, app_key)
     app_state["last_active_ts"] = time.time()
-    if title:
+    if title and app_key != "browser":
         app_state["last_title"] = title
 
 
@@ -183,7 +183,11 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
             is_active = False
 
         emoji = "▶️" if is_active else ("🟢" if running else "💤")
-        display_name = app_state.get("last_title") or info.get("display") or DISPLAY_NAMES.get(app_key, app_key)
+        display_name = (
+            "Браузер"
+            if app_key == "browser"
+            else app_state.get("last_title") or info.get("display") or DISPLAY_NAMES.get(app_key, app_key)
+        )
         entries.append(
             {
                 "order": last_active_ts or 0,
@@ -201,6 +205,9 @@ def build_status_text(state: Dict[str, Any]) -> str:
     process_name = process_info.get("name") or "Unknown"
     title = process_info.get("title")
     app_key, detected_title = _detect_app_key(process_info)
+    if app_key == "browser":
+        detected_title = None
+        title = None
     display_name = resolve_display_name(app_key, process_name, detected_title or title)
     tagline = resolve_tagline(app_key)
 
