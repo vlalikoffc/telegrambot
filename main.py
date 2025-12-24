@@ -64,7 +64,12 @@ async def main_async() -> None:
         await application.start()
         await application.updater.start_polling()
         live_task = asyncio.create_task(live_update_loop(application))
-        await application.updater.idle()
+        wait_call = getattr(application.updater, "wait", None)
+        if wait_call:
+            await wait_call()
+        else:
+            stop_event = asyncio.Event()
+            await stop_event.wait()
     finally:
         if live_task:
             live_task.cancel()
