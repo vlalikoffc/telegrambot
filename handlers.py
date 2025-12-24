@@ -5,8 +5,17 @@ from typing import Any, Dict
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
-from messages import get_status_keyboard, reset_chat_session, send_or_edit_status_message
-from state import active_viewer_count_global, ensure_chat_state, prune_expired_viewers, save_state
+from messages import (
+    get_status_keyboard,
+    send_or_edit_status_message,
+    startup_reset_chat_session,
+)
+from state import (
+    active_viewer_count_global,
+    ensure_chat_state,
+    prune_expired_viewers,
+    save_state,
+)
 from status import HIDDEN_STATUS_TEXT, build_status_text
 
 ANTISPAM_SECONDS = 10
@@ -34,10 +43,10 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_state["enabled"] = True
     chat_state["viewers"] = {}
     chat_state["status_visible"] = False
-    chat_state["message_id"] = None
+    chat_state["last_sent_text"] = None
     text = HIDDEN_STATUS_TEXT
 
-    await reset_chat_session(
+    await send_or_edit_status_message(
         context.application,
         chat_id,
         chat_state,
@@ -109,14 +118,20 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
     await save_state(state)
 
 
-async def cleanup_chats_on_startup(app: Application) -> None:
+async def startup_reset_chats(app: Application, preexisting_chat_ids: set[int]) -> None:
     state = app.bot_data.get("state")
     if state is None:
         return
+
+    if app.bot_data.get("startup_reset_done"):
+        return
+
     for chat_id_str, chat_state in state.get("chats", {}).items():
+        chat_id = int(chat_id_str)
+        if chat_id not in preexisting_chat_ids:
+            continue
         if not chat_state.get("enabled"):
             continue
-        chat_id = int(chat_id_str)
         chat_type = chat_state.get("chat_type")
         if not chat_type:
             try:
@@ -131,7 +146,14 @@ async def cleanup_chats_on_startup(app: Application) -> None:
         chat_state["viewers"] = {}
         chat_state["status_visible"] = False
         text = HIDDEN_STATUS_TEXT
-        await reset_chat_session(
-            app, chat_id, chat_state, text, reply_markup=get_status_keyboard()
+        await startup_reset_chat_session(
+            app,
+            chat_id,
+            chat_state,
+            text,
+            reply_markup=get_status_keyboard(),
+            include_restart_notice=True,
         )
+
+    app.bot_data["startup_reset_done"] = True
     await save_state(state)

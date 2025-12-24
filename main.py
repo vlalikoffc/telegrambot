@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -6,10 +8,10 @@ from dotenv import load_dotenv
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers import (
-    cleanup_chats_on_startup,
     handle_show_status_button,
     handle_start,
     handle_text,
+    startup_reset_chats,
 )
 from live_update import live_update_loop
 from state import load_state
@@ -37,30 +39,43 @@ def build_application() -> Application:
     return application
 
 
-async def on_startup(app: Application) -> None:
-    LOGGER.info("Startup: cleaning chats and launching live update loop")
-    await cleanup_chats_on_startup(app)
-    app.create_task(live_update_loop(app))
-
-
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CallbackQueryHandler(handle_show_status_button, pattern="^show_status$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 
-def main() -> None:
+async def main_async() -> None:
     load_dotenv()
     configure_logging()
     LOGGER.info("Starting Telegram PC Status Bot (polling mode)")
 
     state = load_state()
+    preexisting_chat_ids = set(int(cid) for cid in state.get("chats", {}).keys())
     application = build_application()
     application.bot_data["state"] = state
     register_handlers(application)
 
-    application.post_init = on_startup
-    application.run_polling()
+    await application.initialize()
+    await startup_reset_chats(application, preexisting_chat_ids)
+
+    live_task = None
+    try:
+        await application.start()
+        await application.updater.start_polling()
+        live_task = asyncio.create_task(live_update_loop(application))
+        await application.updater.idle()
+    finally:
+        if live_task:
+            live_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await live_task
+        await application.stop()
+        await application.shutdown()
+
+
+def main() -> None:
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

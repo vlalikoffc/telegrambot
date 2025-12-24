@@ -67,15 +67,17 @@ async def send_restart_notice(app: Application, chat_id: int) -> None:
         logging.warning("Chat %s: unexpected restart notice error: %s", chat_id, exc)
 
 
-async def reset_chat_session(
+async def startup_reset_chat_session(
     app: Application,
     chat_id: int,
     chat_state: Dict[str, Any],
     hidden_text: str,
     reply_markup: Optional[InlineKeyboardMarkup],
+    include_restart_notice: bool,
 ) -> None:
     await unpin_all_messages(app, chat_id)
-    await send_restart_notice(app, chat_id)
+    if include_restart_notice:
+        await send_restart_notice(app, chat_id)
     await send_and_pin_status_message(
         app,
         chat_id,
