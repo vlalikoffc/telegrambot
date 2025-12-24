@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import psutil
+import win32api
 import win32gui
 import win32process
 
@@ -52,6 +53,18 @@ def get_system_uptime_seconds() -> float:
 
 def get_local_time_string() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
+
+def get_last_input_idle_seconds() -> Optional[float]:
+    try:
+        last_input = win32api.GetLastInputInfo()
+        current_tick = win32api.GetTickCount()
+        if last_input is None or current_tick is None:
+            return None
+        idle_ms = current_tick - last_input
+        return idle_ms / 1000.0
+    except Exception:
+        return None
 
 
 def get_active_process_info() -> Dict[str, Any]:

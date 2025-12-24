@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from state import ensure_app_state
 from windows import (
     get_active_process_info,
+    get_last_input_idle_seconds,
     get_process_count,
     get_process_uptime_seconds,
     get_local_time_string,
@@ -82,6 +83,7 @@ FAVORITE_APPS = {
 }
 
 ACTIVE_THRESHOLD_SECONDS = 300
+PRESENCE_THRESHOLD_SECONDS = 300
 
 
 def format_duration(seconds: float) -> str:
@@ -230,6 +232,13 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
     process_count = get_process_count()
     if process_count is not None:
         parts.append(f"🔢 Процессов: {process_count}")
+
+    idle_seconds = get_last_input_idle_seconds()
+    is_present = True if idle_seconds is None else idle_seconds < PRESENCE_THRESHOLD_SECONDS
+    if is_present:
+        parts.append("🟢 За компьютером: я здесь")
+    else:
+        parts.append("💤 За компьютером: отошёл")
 
     running_apps = _collect_running_apps()
     favorite_lines = _favorite_entries(state, app_key, running_apps)
