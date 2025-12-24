@@ -5,20 +5,8 @@ from typing import Any, Dict
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
-from messages import (
-    delete_bot_messages,
-    get_status_keyboard,
-    purge_chat_history,
-    send_and_pin_status_message,
-    send_or_edit_status_message,
-)
-from state import (
-    active_viewer_count_global,
-    ensure_chat_state,
-    prune_expired_viewers,
-    record_message_id,
-    save_state,
-)
+from messages import get_status_keyboard, reset_chat_session, send_or_edit_status_message
+from state import active_viewer_count_global, ensure_chat_state, prune_expired_viewers, save_state
 from status import HIDDEN_STATUS_TEXT, build_status_text
 
 ANTISPAM_SECONDS = 10
@@ -46,32 +34,16 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_state["enabled"] = True
     chat_state["viewers"] = {}
     chat_state["status_visible"] = False
+    chat_state["message_id"] = None
     text = HIDDEN_STATUS_TEXT
 
-    if update.effective_chat.type == "private":
-        message_id = chat_state.get("message_id")
-        if message_id:
-            record_message_id(chat_state, message_id)
-        message_ids = chat_state.get("message_ids", [])
-        if message_ids:
-            await delete_bot_messages(context.application, chat_id, message_ids)
-        chat_state["message_ids"] = []
-        chat_state["message_id"] = None
-        await send_and_pin_status_message(
-            context.application,
-            chat_id,
-            chat_state,
-            text,
-            reply_markup=get_status_keyboard(),
-        )
-    else:
-        await send_or_edit_status_message(
-            context.application,
-            chat_id,
-            chat_state,
-            text,
-            reply_markup=get_status_keyboard(),
-        )
+    await reset_chat_session(
+        context.application,
+        chat_id,
+        chat_state,
+        text,
+        reply_markup=get_status_keyboard(),
+    )
 
     _mark_replied(chat_state)
     await save_state(state)
@@ -154,21 +126,12 @@ async def cleanup_chats_on_startup(app: Application) -> None:
             except Exception as exc:
                 logging.warning("Failed to fetch chat info for %s: %s", chat_id, exc)
                 continue
-        include_user_messages = chat_type == "private"
-        if chat_state.get("message_id"):
-            record_message_id(chat_state, chat_state["message_id"])
-        await purge_chat_history(app, chat_id, chat_state, include_user_messages)
-        chat_state["message_ids"] = []
         chat_state["message_id"] = None
         chat_state["last_sent_text"] = None
         chat_state["viewers"] = {}
         chat_state["status_visible"] = False
         text = HIDDEN_STATUS_TEXT
-        await send_and_pin_status_message(
-            app,
-            chat_id,
-            chat_state,
-            text,
-            reply_markup=get_status_keyboard(),
+        await reset_chat_session(
+            app, chat_id, chat_state, text, reply_markup=get_status_keyboard()
         )
     await save_state(state)

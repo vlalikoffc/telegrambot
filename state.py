@@ -37,7 +37,6 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "enabled": False,
             "chat_type": None,
             "message_id": None,
-            "message_ids": [],
             "last_sent_text": None,
             "backoff_until": None,
             "last_user_reply_ts": None,
@@ -88,9 +87,3 @@ def ensure_app_state(state: Dict[str, Any], app_key: str) -> Dict[str, Any]:
             "last_title": None,
         },
     )
-
-
-def record_message_id(chat_state: Dict[str, Any], message_id: int) -> None:
-    message_ids = chat_state.setdefault("message_ids", [])
-    if message_id not in message_ids:
-        message_ids.append(message_id)
