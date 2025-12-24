@@ -5,7 +5,13 @@ from typing import Any, Dict
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
-from messages import delete_bot_messages, send_and_pin_status_message, send_or_edit_status_message
+from messages import (
+    delete_bot_messages,
+    purge_chat_history,
+    send_and_pin_status_message,
+    send_or_edit_status_message,
+    send_status_reply_message,
+)
 from state import ensure_chat_state, record_message_id, save_state
 from status import build_status_text
 
@@ -62,9 +68,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     text = build_status_text(state)
-    message = await context.application.bot.send_message(chat_id=chat_id, text=text)
-    if update.effective_chat.type == "private":
-        record_message_id(chat_state, message.message_id)
+    await send_status_reply_message(context.application, chat_id, chat_state, text)
     _mark_replied(chat_state)
     await save_state(state)
 
@@ -86,7 +90,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await save_state(state)
 
 
-async def cleanup_private_chats_on_startup(app: Application) -> None:
+async def cleanup_chats_on_startup(app: Application) -> None:
     state = app.bot_data.get("state")
     if state is None:
         return
@@ -103,14 +107,10 @@ async def cleanup_private_chats_on_startup(app: Application) -> None:
             except Exception as exc:
                 logging.warning("Failed to fetch chat info for %s: %s", chat_id, exc)
                 continue
-        if chat_type != "private":
-            continue
-        message_id = chat_state.get("message_id")
-        if message_id:
-            record_message_id(chat_state, message_id)
-        message_ids = chat_state.get("message_ids", [])
-        if message_ids:
-            await delete_bot_messages(app, chat_id, message_ids)
+        include_user_messages = chat_type == "private"
+        if chat_state.get("message_id"):
+            record_message_id(chat_state, chat_state["message_id"])
+        await purge_chat_history(app, chat_id, chat_state, include_user_messages)
         chat_state["message_ids"] = []
         chat_state["message_id"] = None
         chat_state["last_sent_text"] = None

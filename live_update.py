@@ -32,15 +32,25 @@ async def update_live_status_for_app(app: Application) -> None:
     except Exception as exc:
         logging.exception("Failed to build status text: %s", exc)
         return
+    tasks = []
     for chat_id_str, chat_state in state.get("chats", {}).items():
         if not chat_state.get("enabled"):
             continue
         chat_id = int(chat_id_str)
-        try:
-            await update_status_for_chat(app, chat_id, chat_state, text)
-        except Exception as exc:
-            logging.exception("Chat %s: loop error: %s", chat_id, exc)
-            continue
+        tasks.append(update_status_for_chat(app, chat_id, chat_state, text))
+    if tasks:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for task_result, (chat_id_str, chat_state) in zip(
+            results, [
+                (cid, cstate)
+                for cid, cstate in state.get("chats", {}).items()
+                if cstate.get("enabled")
+            ],
+        ):
+            if isinstance(task_result, Exception):
+                logging.exception(
+                    "Chat %s: loop error: %s", int(chat_id_str), task_result
+                )
     await save_state(state)
 
 

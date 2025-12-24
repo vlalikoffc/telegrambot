@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from handlers import cleanup_private_chats_on_startup, handle_start, handle_status, handle_text
+from handlers import cleanup_chats_on_startup, handle_start, handle_status, handle_text
 from live_update import live_update_loop
 from state import load_state
 
@@ -33,8 +33,8 @@ def build_application() -> Application:
 
 
 async def on_startup(app: Application) -> None:
-    LOGGER.info("Startup: cleaning private chats and launching live update loop")
-    await cleanup_private_chats_on_startup(app)
+    LOGGER.info("Startup: cleaning chats and launching live update loop")
+    await cleanup_chats_on_startup(app)
     app.create_task(live_update_loop(app))
 
 
