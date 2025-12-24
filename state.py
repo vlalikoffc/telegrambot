@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -40,9 +41,30 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "last_sent_text": None,
             "backoff_until": None,
             "last_user_reply_ts": None,
+            "viewers": {},
+            "status_visible": False,
         },
     )
     return chat_state
+
+
+def active_viewers(chat_state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    viewers = chat_state.get("viewers") or {}
+    now = time.time()
+    return {
+        uid: info
+        for uid, info in viewers.items()
+        if info.get("view_expire") and info["view_expire"] > now
+    }
+
+
+def prune_expired_viewers(chat_state: Dict[str, Any]) -> None:
+    viewers = chat_state.get("viewers") or {}
+    now = time.time()
+    to_remove = [uid for uid, info in viewers.items() if not info.get("view_expire") or info["view_expire"] <= now]
+    for uid in to_remove:
+        viewers.pop(uid, None)
+    chat_state["viewers"] = viewers
 
 
 def ensure_app_state(state: Dict[str, Any], app_key: str) -> Dict[str, Any]:

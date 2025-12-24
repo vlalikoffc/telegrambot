@@ -3,9 +3,15 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from handlers import cleanup_chats_on_startup, handle_start, handle_status, handle_text
+from handlers import (
+    cleanup_chats_on_startup,
+    handle_show_status_button,
+    handle_start,
+    handle_status,
+    handle_text,
+)
 from live_update import live_update_loop
 from state import load_state
 
@@ -41,6 +47,7 @@ async def on_startup(app: Application) -> None:
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CommandHandler("status", handle_status))
+    application.add_handler(CallbackQueryHandler(handle_show_status_button, pattern="^show_status$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 

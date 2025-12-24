@@ -14,6 +14,7 @@ from windows import (
 )
 
 FOOTER_TEXT = "вот чё я делаю, но не следите пж за мной 24/7(мой юз в тг @vlalikoffc)"
+HIDDEN_STATUS_TEXT = "🙈 Статус сейчас скрыт\n\nНажмите кнопку ниже, чтобы посмотреть актуальный статус."
 
 BROWSER_PROCESS_NAMES = {
     "chrome.exe",
@@ -199,7 +200,7 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
     return [item["line"] for item in entries]
 
 
-def build_status_text(state: Dict[str, Any]) -> str:
+def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> str:
     uptime_seconds = get_system_uptime_seconds()
     process_info = get_active_process_info()
     process_name = process_info.get("name") or "Unknown"
@@ -240,4 +241,8 @@ def build_status_text(state: Dict[str, Any]) -> str:
 
     parts.append("")
     parts.append(FOOTER_TEXT)
+    if active_viewer_count > 0:
+        parts.append(f"👀 Сейчас наблюдают за статусом: {active_viewer_count}")
+    else:
+        parts.append("😴 Сейчас никто не смотрит")
     return "\n".join(parts)

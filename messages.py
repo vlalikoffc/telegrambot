@@ -3,6 +3,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import RetryAfter, TelegramError
 from telegram.ext import Application
 
@@ -57,12 +58,24 @@ async def _delete_message(app: Application, chat_id: int, message_id: int) -> No
         )
 
 
+def get_status_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text="👁 Показать статус", callback_data="show_status")]]
+    )
+
+
 async def send_and_pin_status_message(
-    app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+    app: Application,
+    chat_id: int,
+    chat_state: Dict[str, Any],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> None:
     try:
         await RATE_LIMITER.wait("send", 2.0)
-        message = await app.bot.send_message(chat_id=chat_id, text=text)
+        message = await app.bot.send_message(
+            chat_id=chat_id, text=text, reply_markup=reply_markup
+        )
         chat_state["message_id"] = message.message_id
         chat_state["last_sent_text"] = None
         chat_state["backoff_until"] = None
@@ -84,7 +97,11 @@ async def send_and_pin_status_message(
 
 
 async def send_or_edit_status_message(
-    app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+    app: Application,
+    chat_id: int,
+    chat_state: Dict[str, Any],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> None:
     lock = _get_chat_lock(chat_id)
     async with lock:
@@ -105,6 +122,7 @@ async def send_or_edit_status_message(
                 chat_id,
                 chat_state,
                 text,
+                reply_markup=reply_markup,
             )
             return
 
@@ -114,6 +132,7 @@ async def send_or_edit_status_message(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=text,
+                reply_markup=reply_markup,
             )
             chat_state["last_sent_text"] = text
             chat_state["backoff_until"] = None
@@ -122,18 +141,28 @@ async def send_or_edit_status_message(
             _set_backoff(chat_state, exc.retry_after, "edit", chat_id)
         except TelegramError as exc:
             logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
-            await send_and_pin_status_message(app, chat_id, chat_state, text)
+            await send_and_pin_status_message(
+                app, chat_id, chat_state, text, reply_markup=reply_markup
+            )
         except Exception as exc:
             logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
-            await send_and_pin_status_message(app, chat_id, chat_state, text)
+            await send_and_pin_status_message(
+                app, chat_id, chat_state, text, reply_markup=reply_markup
+            )
 
 
 async def send_status_reply_message(
-    app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+    app: Application,
+    chat_id: int,
+    chat_state: Dict[str, Any],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> Optional[int]:
     try:
         await RATE_LIMITER.wait("send", 2.0)
-        message = await app.bot.send_message(chat_id=chat_id, text=text)
+        message = await app.bot.send_message(
+            chat_id=chat_id, text=text, reply_markup=reply_markup
+        )
         if chat_state.get("chat_type") == "private":
             record_message_id(chat_state, message.message_id)
         return message.message_id
