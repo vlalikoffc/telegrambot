@@ -5,6 +5,7 @@ from typing import Dict, List
 import psutil
 
 HARDWARE_CACHE: Dict[str, str] = {}
+HARDWARE_TEXT: str = ""
 _HARDWARE_INITIALIZED = False
 
 
@@ -66,6 +67,7 @@ def _get_architecture() -> str:
 
 def init_hardware_cache() -> None:
     global _HARDWARE_INITIALIZED
+    global HARDWARE_TEXT
     if _HARDWARE_INITIALIZED:
         return
     HARDWARE_CACHE.update(
@@ -77,17 +79,18 @@ def init_hardware_cache() -> None:
             "arch": _get_architecture(),
         }
     )
+    HARDWARE_TEXT = "\n".join(
+        [
+            "🖥️ Железо ПК:",
+            f"🧠 CPU: {HARDWARE_CACHE.get('cpu', 'Unknown CPU')}",
+            f"🎮 GPU: {HARDWARE_CACHE.get('gpu', 'Unknown GPU')}",
+            f"💾 RAM: {HARDWARE_CACHE.get('ram', 'Unknown RAM')}",
+            f"🪟 Windows: {HARDWARE_CACHE.get('windows', 'Unknown Windows')}",
+            f"🧩 Архитектура: {HARDWARE_CACHE.get('arch', 'Unknown')}",
+        ]
+    )
     _HARDWARE_INITIALIZED = True
 
 
 def build_hardware_text() -> str:
-    cache = HARDWARE_CACHE or {}
-    parts = [
-        "🖥️ Железо ПК:",
-        f"🧠 CPU: {cache.get('cpu', 'Unknown CPU')}",
-        f"🎮 GPU: {cache.get('gpu', 'Unknown GPU')}",
-        f"💾 RAM: {cache.get('ram', 'Unknown RAM')}",
-        f"🪟 Windows: {cache.get('windows', 'Unknown Windows')}",
-        f"🧩 Архитектура: {cache.get('arch', 'Unknown')}",
-    ]
-    return "\n".join(parts)
+    return HARDWARE_TEXT or "🖥️ Железо ПК:\n(данные недоступны)"

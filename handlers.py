@@ -54,6 +54,12 @@ def _mark_replied(chat_state: Dict[str, Any]) -> None:
     chat_state["last_user_reply_ts"] = time.time()
 
 
+def _log_view_change(chat_id: int, old: str, new: str) -> None:
+    if old == new:
+        return
+    logging.info("Chat %s: View change: %s -> %s", chat_id, old, new)
+
+
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat is None:
         return
@@ -148,6 +154,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
         )
         chat_state["status_visible"] = True
         chat_state["enabled"] = True
+        _log_view_change(chat_id, chat_state.get("view_mode"), ViewMode.STATUS.value)
         chat_state["view_mode"] = ViewMode.STATUS.value
         chat_state["stats_page"] = 0
 
@@ -302,22 +309,11 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
         if state is None:
             return
         chat_state = ensure_chat_state(state, chat_id)
-        prune_expired_viewers(chat_state)
-        active = active_viewers(chat_state)
-        if not active:
-            chat_state["status_visible"] = False
-            chat_state["view_mode"] = ViewMode.STATUS.value
-            await send_or_edit_status_message(
-                context.application,
-                chat_id,
-                chat_state,
-                HIDDEN_STATUS_TEXT,
-                reply_markup=get_status_keyboard(show_button=True, is_owner=is_owner(chat_id)),
-                state=state,
-            )
-            await save_state(state)
+        if chat_state.get("view_mode") == ViewMode.HARDWARE.value:
+            logging.info("Chat %s: Hardware view already active", chat_id)
             return
-
+        old_view = chat_state.get("view_mode")
+        _log_view_change(chat_id, old_view, ViewMode.HARDWARE.value)
         chat_state["view_mode"] = ViewMode.HARDWARE.value
         text = build_hardware_text()
         await send_or_edit_status_message(
@@ -347,6 +343,8 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
         chat_state = ensure_chat_state(state, chat_id)
         prune_expired_viewers(chat_state)
         active = active_viewers(chat_state)
+        old_view = chat_state.get("view_mode")
+        _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
         chat_state["view_mode"] = ViewMode.STATUS.value
         if not active:
             chat_state["status_visible"] = False
@@ -405,8 +403,6 @@ async def startup_reset_chats(app: Application, preexisting_chat_ids: set[int]) 
             except Exception as exc:
                 logging.warning("Failed to fetch chat info for %s: %s", chat_id, exc)
                 continue
-        chat_state["message_id"] = None
-        chat_state["last_sent_text"] = None
         chat_state["viewers"] = {}
         chat_state["status_visible"] = False
         text = HIDDEN_STATUS_TEXT

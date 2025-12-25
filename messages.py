@@ -102,6 +102,20 @@ async def unpin_all_messages(app: Application, chat_id: int) -> None:
         logging.warning("Chat %s: unexpected unpin error: %s", chat_id, exc)
 
 
+async def unpin_status_message(app: Application, chat_id: int, message_id: int | None) -> None:
+    if not message_id:
+        return
+    try:
+        await app.bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
+        logging.info("Chat %s: unpinned old status message %s", chat_id, message_id)
+    except TelegramError as exc:
+        logging.warning("Chat %s: failed to unpin message %s: %s", chat_id, message_id, exc)
+    except Exception as exc:
+        logging.warning(
+            "Chat %s: unexpected unpin error for message %s: %s", chat_id, message_id, exc
+        )
+
+
 async def send_restart_notice(app: Application, chat_id: int) -> None:
     try:
         await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
@@ -123,7 +137,7 @@ async def startup_reset_chat_session(
     include_restart_notice: bool,
     state: Optional[Dict[str, Any]] = None,
 ) -> None:
-    await unpin_all_messages(app, chat_id)
+    await unpin_status_message(app, chat_id, chat_state.get("message_id"))
     if include_restart_notice:
         await send_restart_notice(app, chat_id)
     await send_and_pin_status_message(
