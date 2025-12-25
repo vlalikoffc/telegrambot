@@ -1,14 +1,11 @@
 import platform
 import subprocess
-from typing import List
-
-import platform
-import subprocess
 from typing import Dict, List
 
 import psutil
 
 HARDWARE_CACHE: Dict[str, str] = {}
+_HARDWARE_INITIALIZED = False
 
 
 def _get_cpu_model() -> str:
@@ -68,6 +65,9 @@ def _get_architecture() -> str:
 
 
 def init_hardware_cache() -> None:
+    global _HARDWARE_INITIALIZED
+    if _HARDWARE_INITIALIZED:
+        return
     HARDWARE_CACHE.update(
         {
             "cpu": _get_cpu_model(),
@@ -77,6 +77,7 @@ def init_hardware_cache() -> None:
             "arch": _get_architecture(),
         }
     )
+    _HARDWARE_INITIALIZED = True
 
 
 def build_hardware_text() -> str:

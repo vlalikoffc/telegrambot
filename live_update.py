@@ -7,6 +7,7 @@ from telegram.ext import Application
 from config import OWNER_IDS
 from messages import get_status_keyboard, send_or_edit_status_message
 from state import (
+    ViewMode,
     active_viewer_count_global,
     active_viewers,
     get_view_stats,
@@ -56,9 +57,9 @@ async def update_live_status_for_app(app: Application) -> None:
         active = active_viewers(chat_state)
 
         if not active:
-            if chat_state.get("status_visible") or chat_state.get("view_mode") != "status":
+            if chat_state.get("status_visible") or chat_state.get("view_mode") != ViewMode.STATUS.value:
                 chat_state["status_visible"] = False
-                chat_state["view_mode"] = "status"
+                chat_state["view_mode"] = ViewMode.STATUS.value
                 tasks_info.append(
                     (
                         chat_id,
@@ -78,7 +79,7 @@ async def update_live_status_for_app(app: Application) -> None:
             continue
 
         chat_state["status_visible"] = True
-        if chat_state.get("view_mode") != "status":
+        if chat_state.get("view_mode") != ViewMode.STATUS.value:
             continue
 
         try:

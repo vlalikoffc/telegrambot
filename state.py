@@ -1,8 +1,16 @@
 import asyncio
 import json
 import time
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict
+
+
+class ViewMode(str, Enum):
+    STATUS = "status"
+    HARDWARE = "hardware"
+    VIEWERS = "viewers"
+    STATS = "stats"
 
 STATE_FILE = Path(__file__).with_name("state.json")
 STATE_LOCK = asyncio.Lock()
@@ -44,12 +52,12 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "last_user_reply_ts": None,
             "viewers": {},
             "status_visible": False,
-            "view_mode": "status",
+            "view_mode": ViewMode.STATUS.value,
             "stats_page": 0,
         },
     )
-    if "view_mode" not in chat_state:
-        chat_state["view_mode"] = "status"
+    if chat_state.get("view_mode") not in {mode.value for mode in ViewMode}:
+        chat_state["view_mode"] = ViewMode.STATUS.value
     if "stats_page" not in chat_state:
         chat_state["stats_page"] = 0
     return chat_state
@@ -62,7 +70,7 @@ def disable_chat(state: Dict[str, Any] | None, chat_id: int) -> None:
     chat_state["enabled"] = False
     chat_state["viewers"] = {}
     chat_state["status_visible"] = False
-    chat_state["view_mode"] = "status"
+    chat_state["view_mode"] = ViewMode.STATUS.value
     chat_state["message_id"] = None
     chat_state["last_sent_text"] = None
     chat_state["backoff_until"] = None

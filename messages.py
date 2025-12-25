@@ -182,54 +182,76 @@ async def send_or_edit_status_message(
 ) -> None:
     lock = _get_chat_lock(chat_id)
     async with lock:
-        now = time.time()
-        backoff_until = chat_state.get("backoff_until")
-        if backoff_until and now < backoff_until:
-            remaining = max(0, int(backoff_until - now))
+        snapshot_message_id = chat_state.get("message_id")
+        snapshot_last_text = chat_state.get("last_sent_text")
+        snapshot_backoff = chat_state.get("backoff_until")
+
+    now = time.time()
+    if snapshot_backoff and now < snapshot_backoff:
+        remaining = max(0, int(snapshot_backoff - now))
+        logging.info("Chat %s: backoff %s sec", chat_id, remaining)
+        return
+
+    if snapshot_message_id and snapshot_last_text == text:
+        logging.info("Chat %s: skip unchanged", chat_id)
+        return
+
+    if not snapshot_message_id:
+        await send_and_pin_status_message(
+            app,
+            chat_id,
+            chat_state,
+            text,
+            reply_markup=reply_markup,
+            state=state,
+        )
+        return
+
+    await RATE_LIMITER.wait("edit", 5.0, scope=str(chat_id))
+
+    need_send_instead = False
+    async with lock:
+        message_id = chat_state.get("message_id")
+        current_backoff = chat_state.get("backoff_until")
+        if current_backoff and time.time() < current_backoff:
+            remaining = max(0, int(current_backoff - time.time()))
             logging.info("Chat %s: backoff %s sec", chat_id, remaining)
             return
-        if chat_state.get("last_sent_text") == text:
+        if not message_id:
+            need_send_instead = True
+        elif chat_state.get("last_sent_text") == text:
             logging.info("Chat %s: skip unchanged", chat_id)
             return
+        else:
+            try:
+                await app.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
+                chat_state["last_sent_text"] = text
+                chat_state["backoff_until"] = None
+                logging.info("Chat %s: edited ok", chat_id)
+                return
+            except RetryAfter as exc:
+                _set_backoff(chat_state, exc.retry_after, "edit", chat_id)
+                return
+            except (Forbidden, BadRequest) as exc:
+                logging.warning("Chat %s: unrecoverable edit error: %s", chat_id, exc)
+                disable_chat(state, chat_id)
+                return
+            except TelegramError as exc:
+                logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
+                need_send_instead = True
+            except Exception as exc:
+                logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
+                need_send_instead = True
 
-        message_id = chat_state.get("message_id")
-        if not message_id:
-            await send_and_pin_status_message(
-                app,
-                chat_id,
-                chat_state,
-                text,
-                reply_markup=reply_markup,
-                state=state,
-            )
-            return
-
-        try:
-            await RATE_LIMITER.wait("edit", 5.0, scope=str(chat_id))
-            await app.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            chat_state["last_sent_text"] = text
-            chat_state["backoff_until"] = None
-            logging.info("Chat %s: edited ok", chat_id)
-        except RetryAfter as exc:
-            _set_backoff(chat_state, exc.retry_after, "edit", chat_id)
-        except (Forbidden, BadRequest) as exc:
-            logging.warning("Chat %s: unrecoverable edit error: %s", chat_id, exc)
-            disable_chat(state, chat_id)
-        except TelegramError as exc:
-            logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
-            await send_and_pin_status_message(
-                app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
-            )
-        except Exception as exc:
-            logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
-            await send_and_pin_status_message(
-                app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
-            )
+    if need_send_instead:
+        await send_and_pin_status_message(
+            app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
+        )
 
 
 async def send_status_reply_message(
