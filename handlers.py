@@ -35,6 +35,21 @@ VIEW_DURATION_SECONDS = 300
 BUTTON_RATE_LIMIT_SECONDS = 2.0
 
 _callback_locks: dict[int, asyncio.Lock] = {}
+_UI_BUSY_KEY = "ui_busy_count"
+
+
+class _UiBusy:
+    def __init__(self, app: Application):
+        self.app = app
+
+    async def __aenter__(self) -> None:
+        current = int(self.app.bot_data.get(_UI_BUSY_KEY, 0))
+        self.app.bot_data[_UI_BUSY_KEY] = current + 1
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        current = int(self.app.bot_data.get(_UI_BUSY_KEY, 0))
+        next_val = max(0, current - 1)
+        self.app.bot_data[_UI_BUSY_KEY] = next_val
 
 
 def _spawn(app: Application, coro) -> None:
@@ -154,7 +169,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
 
     async def process() -> None:
         lock = _get_callback_lock(chat_id)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
@@ -241,7 +256,7 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
 
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
         lock = _get_callback_lock(chat_id)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
@@ -300,7 +315,7 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id_inner)
         lock = _get_callback_lock(chat_id_inner)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
@@ -370,7 +385,7 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id_inner)
         lock = _get_callback_lock(chat_id_inner)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
@@ -429,7 +444,7 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
         lock = _get_callback_lock(chat_id)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
@@ -486,7 +501,7 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
         lock = _get_callback_lock(chat_id)
-        async with lock:
+        async with _UiBusy(context.application), lock:
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:

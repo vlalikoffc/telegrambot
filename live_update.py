@@ -44,6 +44,10 @@ async def update_live_status_for_app(app: Application) -> None:
     if state is None:
         return
 
+    if int(app.bot_data.get("ui_busy_count", 0)) > 0:
+        logging.info("Live-update skipped (UI priority)")
+        return
+
     current_date = get_local_date_string()
     get_view_stats(state, current_date)
     global_active_count = active_viewer_count_global(state)

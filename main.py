@@ -60,8 +60,9 @@ def register_handlers(application: Application) -> None:
 
 async def main_async() -> None:
     load_dotenv()
-    init_hardware_cache()
     configure_logging()
+    init_hardware_cache()
+    LOGGER.info("Hardware cached before bot start")
     LOGGER.info("Starting Telegram PC Status Bot (polling mode)")
 
     state = load_state()
