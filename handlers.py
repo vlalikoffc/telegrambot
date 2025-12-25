@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import logging
 import time
 from typing import Any, Dict
@@ -176,16 +175,22 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
     if user_id is None:
         await query.answer()
         return
-    if _rate_limited_button(chat_state, user_id):
+    rate_limited = _rate_limited_button(chat_state, user_id)
+    if rate_limited:
         await query.answer(text="⏳ Подожди секунду", show_alert=False)
         return
     await query.answer()
 
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
+
     async def process() -> None:
+        start_ts = time.monotonic()
         lock = _get_callback_lock(chat_id)
         async with _UiBusy(context.application), lock:
             chat_state["callback_in_progress"] = True
-            start_ts = time.monotonic()
             try:
                 prune_expired_viewers(chat_state)
                 if (
@@ -265,10 +270,19 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: VIEWER_INFO (chat=%s, user=%s)", chat_id, user_id)
-    if chat_state and user_id is not None and _rate_limited_button(chat_state, user_id):
-        await query.answer(text="⏳ Подожди секунду", show_alert=False)
+    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
+    unauthorized = user_id is None or not is_owner(user_id)
+    await query.answer(
+        text="⏳ Подожди секунду" if rate_limited else ("Недостаточно прав" if unauthorized else None),
+        show_alert=unauthorized,
+    )
+    if rate_limited or unauthorized:
         return
-    await query.answer(text=None)
+
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
 
     async def process() -> None:
         state_inner = context.application.bot_data.get("state")
@@ -281,15 +295,6 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
-                if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
-                    logging.info(
-                        "Chat %s: callback ignored (hardware view active)", chat_id
-                    )
-                    return
-                if not is_owner(user_id):
-                    await query.answer(text="Недостаточно прав", show_alert=True)
-                    return
-
                 prune_expired_viewers(chat_state_inner)
                 chat_state_inner["view_mode"] = ViewMode.VIEWERS.value
                 chat_state_inner["stats_page"] = 0
@@ -323,10 +328,19 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: VIEWER_STATS (chat=%s, user=%s)", chat_id, user_id)
-    if chat_state and user_id is not None and _rate_limited_button(chat_state, user_id):
-        await query.answer(text="⏳ Подожди секунду", show_alert=False)
+    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
+    unauthorized = user_id is None or not is_owner(user_id)
+    await query.answer(
+        text="⏳ Подожди секунду" if rate_limited else ("Недостаточно прав" if unauthorized else None),
+        show_alert=unauthorized,
+    )
+    if rate_limited or unauthorized:
         return
-    await query.answer(text=None)
+
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
 
     async def process() -> None:
         user_inner = query.from_user.id if query.from_user else None
@@ -340,15 +354,6 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
-                if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
-                    logging.info(
-                        "Chat %s: callback ignored (hardware view active)", chat_id_inner
-                    )
-                    return
-                if not is_owner(user_inner):
-                    await query.answer(text="Недостаточно прав", show_alert=True)
-                    return
-
                 chat_state_inner["view_mode"] = ViewMode.STATS.value
                 stats = get_view_stats(state_inner, get_local_date_string())
                 total = max(1, (len(stats.get("users", {})) + 14) // 15)
@@ -384,10 +389,19 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: VIEWER_STATS_PAGE (chat=%s, user=%s)", chat_id, user_id)
-    if chat_state and user_id is not None and _rate_limited_button(chat_state, user_id):
-        await query.answer(text="⏳ Подожди секунду", show_alert=False)
+    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
+    unauthorized = user_id is None or not is_owner(user_id)
+    await query.answer(
+        text="⏳ Подожди секунду" if rate_limited else ("Недостаточно прав" if unauthorized else None),
+        show_alert=unauthorized,
+    )
+    if rate_limited or unauthorized:
         return
-    await query.answer(text=None)
+
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
 
     async def process() -> None:
         data = query.data or ""
@@ -410,15 +424,6 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
             chat_state_inner["callback_in_progress"] = True
             start_ts = time.monotonic()
             try:
-                if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
-                    logging.info(
-                        "Chat %s: callback ignored (hardware view active)", chat_id_inner
-                    )
-                    return
-                if not is_owner(user_inner):
-                    await query.answer(text="Недостаточно прав", show_alert=True)
-                    return
-
                 stats = get_view_stats(state_inner, get_local_date_string())
                 total = max(1, (len(stats.get("users", {})) + 14) // 15)
                 page_inner = max(0, min(page, total - 1))
@@ -454,10 +459,15 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: SHOW_HARDWARE (chat=%s, user=%s)", chat_id, user_id)
-    if chat_state and user_id is not None and _rate_limited_button(chat_state, user_id):
-        await query.answer(text="⏳ Подожди секунду", show_alert=False)
+    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
+    await query.answer(text="⏳ Подожди секунду" if rate_limited else None, show_alert=False)
+    if rate_limited:
         return
-    await query.answer()
+
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
 
     async def process() -> None:
         state_inner = context.application.bot_data.get("state")
@@ -511,10 +521,15 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: BACK_TO_STATUS (chat=%s, user=%s)", chat_id, user_id)
-    if chat_state and user_id is not None and _rate_limited_button(chat_state, user_id):
-        await query.answer(text="⏳ Подожди секунду", show_alert=False)
+    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
+    await query.answer(text="⏳ Подожди секунду" if rate_limited else None, show_alert=False)
+    if rate_limited:
         return
-    await query.answer()
+
+    lock = _get_callback_lock(chat_id)
+    if lock.locked():
+        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        return
 
     async def process() -> None:
         state_inner = context.application.bot_data.get("state")

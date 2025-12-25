@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Tuple
 from config import OWNER_IDS
 from windows import format_local_hhmm
 
+
 PAGE_SIZE = 15
+RECENT_VIEW_WINDOW_SECONDS = 300
 
 
 def _format_user_display(entry: Dict[str, Any]) -> str:
@@ -28,7 +30,12 @@ def build_recent_viewers_text(recent_views: Dict[int, Dict[str, Any]]) -> str:
 
 def _sorted_stats_entries(stats: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
     entries = list(stats.get("users", {}).items())
-    entries.sort(key=lambda item: (-int(item[1].get("count", 0)), -(item[1].get("last_view") or 0)))
+    entries.sort(
+        key=lambda item: (
+            -int(item[1].get("count", 0)),
+            -(item[1].get("last_view") or 0),
+        )
+    )
     return entries
 
 
@@ -59,9 +66,6 @@ def is_owner(user_id: int | None) -> bool:
     return user_id in OWNER_IDS
 
 
-RECENT_VIEW_WINDOW_SECONDS = 300
-
-
 def prune_recent_views(recent_views: Dict[int, Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
     now = time.time()
     before = len(recent_views)
@@ -76,5 +80,12 @@ def prune_recent_views(recent_views: Dict[int, Dict[str, Any]]) -> Dict[int, Dic
     return cleaned
 
 
-def add_recent_view(recent_views: Dict[int, Dict[str, Any]], user_id: int, username: str | None, name: str | None, timestamp: float) -> None:
+def add_recent_view(
+    recent_views: Dict[int, Dict[str, Any]],
+    user_id: int,
+    username: str | None,
+    name: str | None,
+    timestamp: float,
+) -> None:
     recent_views[user_id] = {"username": username, "name": name, "last_view": timestamp}
+

@@ -1,11 +1,13 @@
+import logging
 import platform
 import subprocess
 from typing import Dict, List
 
 import psutil
 
+
 HARDWARE_CACHE: Dict[str, str] = {}
-HARDWARE_TEXT: str = ""
+HARDWARE_TEXT = ""
 _HARDWARE_INITIALIZED = False
 
 
@@ -24,7 +26,7 @@ def _get_cpu_model() -> str:
         if filtered:
             return filtered[0]
     except Exception:
-        pass
+        logging.debug("CPU model detection via wmic failed", exc_info=True)
     return cpu_name or "Unknown CPU"
 
 
@@ -40,7 +42,7 @@ def _get_gpu_model() -> str:
         if filtered:
             return filtered[0]
     except Exception:
-        pass
+        logging.debug("GPU detection via wmic failed", exc_info=True)
     return "Unknown GPU"
 
 
@@ -59,10 +61,10 @@ def _get_windows_version() -> str:
 
 
 def _get_architecture() -> str:
-    arch = platform.machine() or "Unknown"
-    if arch.upper() == "AMD64":
+    arch = (platform.machine() or "Unknown").upper()
+    if arch == "AMD64":
         return "x64"
-    return arch
+    return arch.lower() if arch else "unknown"
 
 
 def init_hardware_cache() -> None:
@@ -86,7 +88,7 @@ def init_hardware_cache() -> None:
             f"🎮 GPU: {HARDWARE_CACHE.get('gpu', 'Unknown GPU')}",
             f"💾 RAM: {HARDWARE_CACHE.get('ram', 'Unknown RAM')}",
             f"🪟 Windows: {HARDWARE_CACHE.get('windows', 'Unknown Windows')}",
-            f"🧩 Архитектура: {HARDWARE_CACHE.get('arch', 'Unknown')}",
+            f"🧩 Архитектура: {HARDWARE_CACHE.get('arch', 'unknown')}",
         ]
     )
     _HARDWARE_INITIALIZED = True
@@ -94,3 +96,4 @@ def init_hardware_cache() -> None:
 
 def build_hardware_text() -> str:
     return HARDWARE_TEXT or "🖥️ Железо ПК:\n(данные недоступны)"
+

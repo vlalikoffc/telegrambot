@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -29,7 +28,7 @@ class OwnerInfoManager:
             await app.bot.delete_message(chat_id=chat_id, message_id=message_id)
         except TelegramError as exc:
             logging.warning("Chat %s: failed to delete owner info message: %s", chat_id, exc)
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive
             logging.warning("Chat %s: unexpected delete error: %s", chat_id, exc)
         finally:
             stored = self._entries.get(chat_id)
@@ -46,7 +45,6 @@ class OwnerInfoManager:
     ) -> None:
         entry = self._entries.get(chat_id)
         if entry and entry.text == text:
-            # No content change; do nothing to avoid duplication or timer reset.
             return
 
         message_id: Optional[int] = entry.message_id if entry else None
@@ -57,27 +55,22 @@ class OwnerInfoManager:
         if message_id is not None:
             try:
                 await RATE_LIMITER.wait("edit", 5.0, scope=f"owner:{chat_id}")
-                await app.bot.edit_message_text(
-                    chat_id=chat_id, message_id=message_id, text=text
-                )
+                await app.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
             except TelegramError:
                 message_id = None
             except Exception:
                 message_id = None
 
         if message_id is None:
-            message_id = await send_status_reply_message(
-                app, chat_id, chat_state, text, state=state
-            )
+            message_id = await send_status_reply_message(app, chat_id, chat_state, text, state=state)
             if message_id is None:
                 return
 
         new_entry = _OwnerInfoEntry(message_id=message_id, text=text, task=None)
-        delete_task = app.create_task(
-            self._schedule_delete(app, chat_id, message_id, new_entry)
-        )
+        delete_task = app.create_task(self._schedule_delete(app, chat_id, message_id, new_entry))
         new_entry.task = delete_task
         self._entries[chat_id] = new_entry
 
 
 OWNER_INFO_MANAGER = OwnerInfoManager()
+
