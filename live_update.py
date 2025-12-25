@@ -56,7 +56,7 @@ async def update_live_status_for_app(app: Application) -> None:
                             chat_id,
                             chat_state,
                             HIDDEN_STATUS_TEXT,
-                            reply_markup=get_status_keyboard(),
+                            reply_markup=get_status_keyboard(show_button=True),
                         ),
                     )
                 )
@@ -72,7 +72,11 @@ async def update_live_status_for_app(app: Application) -> None:
                 chat_id_str,
                 chat_state,
                 update_status_for_chat(
-                    app, chat_id, chat_state, text, reply_markup=None
+                    app,
+                    chat_id,
+                    chat_state,
+                    text,
+                    reply_markup=get_status_keyboard(show_button=False),
                 ),
             )
         )

@@ -7,6 +7,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import RetryAfter, TelegramError
 from telegram.ext import Application
 
+from config import GITHUB_URL
+
 
 class RateLimiter:
     def __init__(self) -> None:
@@ -39,10 +41,15 @@ def _set_backoff(chat_state: Dict[str, Any], retry_after: int, reason: str, chat
     logging.warning("Chat %s: backoff %s sec (%s)", chat_id, retry_after, reason)
 
 
-def get_status_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text="👁 Показать статус", callback_data="show_status")]]
-    )
+def get_status_keyboard(show_button: bool = True) -> InlineKeyboardMarkup:
+    rows = []
+    first_row = []
+    if show_button:
+        first_row.append(InlineKeyboardButton(text="👁 Показать статус", callback_data="show_status"))
+    first_row.append(InlineKeyboardButton(text="💻 GitHub проекта", url=GITHUB_URL))
+    rows.append(first_row)
+    rows.append([InlineKeyboardButton(text="ℹ️ Больше информации", callback_data="viewer_info")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def unpin_all_messages(app: Application, chat_id: int) -> None:

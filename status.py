@@ -3,6 +3,8 @@ import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
+from presence import PRESENCE_THRESHOLD_SECONDS, PRESENCE_TRACKER, presence_duration_seconds
+from runtime import get_bot_uptime_seconds
 from state import ensure_app_state
 from windows import (
     get_active_process_info,
@@ -10,7 +12,6 @@ from windows import (
     get_process_count,
     get_process_uptime_seconds,
     get_local_time_string,
-    get_system_uptime_seconds,
     get_window_title_for_pid,
     list_running_processes,
 )
@@ -87,9 +88,6 @@ FAVORITE_APPS = {
 }
 
 ACTIVE_THRESHOLD_SECONDS = 300
-PRESENCE_THRESHOLD_SECONDS = 300
-
-
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return str(timedelta(seconds=seconds))
@@ -245,7 +243,7 @@ def _detect_work_languages(current_pid: int) -> List[str]:
 
 
 def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> str:
-    uptime_seconds = get_system_uptime_seconds()
+    uptime_seconds = get_bot_uptime_seconds()
     process_info = get_active_process_info()
     process_name = process_info.get("name") or "Unknown"
     title = process_info.get("title")
@@ -262,7 +260,7 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
     app_uptime_seconds = get_process_uptime_seconds(process_info.get("create_time"))
 
     parts = [
-        f"🖥️ Аптайм ПК: {format_duration(uptime_seconds)}",
+        f"🖥️ Аптайм ПК (с запуска бота): {format_duration(uptime_seconds)}",
         f"⌚ Время в Windows: {get_local_time_string()}",
         f"🪟 Активное приложение: {display_name}",
         f"💬 Приписка: {tagline}",
@@ -276,17 +274,16 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
         parts.append(f"🔢 Процессов: {process_count}")
 
     idle_seconds = get_last_input_idle_seconds()
-    if idle_seconds is None:
+    presence_info = PRESENCE_TRACKER.observe(idle_seconds)
+    presence_duration = presence_duration_seconds(presence_info)
+    if presence_info.state == "unknown":
         parts.append("🟢 За компьютером: я здесь")
-    elif idle_seconds < PRESENCE_THRESHOLD_SECONDS:
-        parts.append(
-            f"🟢 За компьютером: я здесь (последний ввод {_format_presence_duration(idle_seconds, with_suffix=True)})"
-        )
+    elif presence_info.state == "active":
+        label = "только что" if presence_duration < 60 else _format_presence_duration(presence_duration, with_suffix=True)
+        parts.append(f"🟢 За компьютером: я здесь (последний ввод {label})")
     else:
-        afk_seconds = idle_seconds - PRESENCE_THRESHOLD_SECONDS
-        parts.append(
-            f"💤 За компьютером: отошёл ({_format_presence_duration(afk_seconds)})"
-        )
+        afk_label = _format_presence_duration(presence_duration)
+        parts.append(f"💤 За компьютером: отошёл ({afk_label})")
 
     running_apps = _collect_running_apps()
     favorite_lines = _favorite_entries(state, app_key, running_apps)

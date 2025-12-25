@@ -11,6 +11,7 @@ from handlers import (
     handle_show_status_button,
     handle_start,
     handle_text,
+    handle_viewer_info_button,
     startup_reset_chats,
 )
 from live_update import live_update_loop
@@ -42,6 +43,7 @@ def build_application() -> Application:
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CallbackQueryHandler(handle_show_status_button, pattern="^show_status$"))
+    application.add_handler(CallbackQueryHandler(handle_viewer_info_button, pattern="^viewer_info$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 

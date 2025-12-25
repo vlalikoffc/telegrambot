@@ -69,6 +69,21 @@ def active_viewer_count_global(state: Dict[str, Any]) -> int:
     return len(viewer_ids)
 
 
+def active_viewer_details_global(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    details: Dict[str, Dict[str, Any]] = {}
+    now = time.time()
+    for chat_state in state.get("chats", {}).values():
+        prune_expired_viewers(chat_state)
+        viewers = chat_state.get("viewers") or {}
+        for uid, info in viewers.items():
+            if info.get("view_expire") and info["view_expire"] > now:
+                details[uid] = {
+                    "username": info.get("username"),
+                    "name": info.get("name"),
+                }
+    return details
+
+
 def prune_expired_viewers(chat_state: Dict[str, Any]) -> None:
     viewers = chat_state.get("viewers") or {}
     now = time.time()
