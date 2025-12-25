@@ -10,7 +10,7 @@ STATE_LOCK = asyncio.Lock()
 
 def load_state() -> Dict[str, Any]:
     if not STATE_FILE.exists():
-        return {"chats": {}, "apps": {}}
+        return {"chats": {}, "apps": {}, "view_stats": {"date": None, "users": {}}}
     try:
         with STATE_FILE.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -18,9 +18,11 @@ def load_state() -> Dict[str, Any]:
             data["chats"] = {}
         if "apps" not in data:
             data["apps"] = {}
+        if "view_stats" not in data:
+            data["view_stats"] = {"date": None, "users": {}}
         return data
     except (OSError, json.JSONDecodeError):
-        return {"chats": {}, "apps": {}}
+        return {"chats": {}, "apps": {}, "view_stats": {"date": None, "users": {}}}
 
 
 async def save_state(state: Dict[str, Any]) -> None:
@@ -43,10 +45,13 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "viewers": {},
             "status_visible": False,
             "view_mode": "status",
+            "stats_page": 0,
         },
     )
     if "view_mode" not in chat_state:
         chat_state["view_mode"] = "status"
+    if "stats_page" not in chat_state:
+        chat_state["stats_page"] = 0
     return chat_state
 
 
@@ -61,6 +66,9 @@ def disable_chat(state: Dict[str, Any] | None, chat_id: int) -> None:
     chat_state["message_id"] = None
     chat_state["last_sent_text"] = None
     chat_state["backoff_until"] = None
+    stats = state.get("view_stats") if state else None
+    if stats:
+        stats.get("users", {}).pop(str(chat_id), None)
 
 
 def active_viewers(chat_state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -118,3 +126,37 @@ def ensure_app_state(state: Dict[str, Any], app_key: str) -> Dict[str, Any]:
             "last_title": None,
         },
     )
+
+
+def ensure_view_stats(state: Dict[str, Any], current_date: str) -> Dict[str, Any]:
+    stats = state.setdefault("view_stats", {"date": None, "users": {}})
+    if stats.get("date") != current_date:
+        stats["date"] = current_date
+        stats["users"] = {}
+    if "users" not in stats:
+        stats["users"] = {}
+    return stats
+
+
+def record_view_event(
+    state: Dict[str, Any],
+    current_date: str,
+    user_id: int,
+    username: str | None,
+    name: str | None,
+    timestamp: float,
+) -> None:
+    stats = ensure_view_stats(state, current_date)
+    users = stats.setdefault("users", {})
+    entry = users.setdefault(
+        str(user_id),
+        {"username": username, "name": name, "count": 0, "last_view": timestamp},
+    )
+    entry["username"] = username or entry.get("username")
+    entry["name"] = name or entry.get("name")
+    entry["count"] = int(entry.get("count", 0)) + 1
+    entry["last_view"] = timestamp
+
+
+def get_view_stats(state: Dict[str, Any], current_date: str) -> Dict[str, Any]:
+    return ensure_view_stats(state, current_date)

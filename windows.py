@@ -55,6 +55,14 @@ def get_local_time_string() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
+def get_local_date_string() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def format_local_hhmm(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp).strftime("%H:%M")
+
+
 def get_last_input_idle_seconds() -> Optional[float]:
     try:
         last_input = win32api.GetLastInputInfo()

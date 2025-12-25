@@ -42,7 +42,9 @@ def _set_backoff(chat_state: Dict[str, Any], retry_after: int, reason: str, chat
     logging.warning("Chat %s: backoff %s sec (%s)", chat_id, retry_after, reason)
 
 
-def get_status_keyboard(show_button: bool = True, include_hardware: bool = False) -> InlineKeyboardMarkup:
+def get_status_keyboard(
+    show_button: bool = True, include_hardware: bool = False, is_owner: bool = False
+) -> InlineKeyboardMarkup:
     rows = []
     first_row = []
     if show_button:
@@ -53,9 +55,35 @@ def get_status_keyboard(show_button: bool = True, include_hardware: bool = False
     second_row: list[InlineKeyboardButton] = []
     if include_hardware:
         second_row.append(InlineKeyboardButton(text="🖥️ Железо", callback_data="show_hardware"))
-    second_row.append(InlineKeyboardButton(text="ℹ️ Больше информации", callback_data="viewer_info"))
-    rows.append(second_row)
+    if is_owner:
+        second_row.append(InlineKeyboardButton(text="ℹ️ Больше информации", callback_data="viewer_info"))
+    if second_row:
+        rows.append(second_row)
     return InlineKeyboardMarkup(rows)
+
+
+def get_viewer_keyboard(include_stats: bool = True) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_status")]]
+    if include_stats:
+        rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="viewer_stats")])
+    return InlineKeyboardMarkup(rows)
+
+
+def get_stats_keyboard(has_prev: bool, has_next: bool, page: int) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    nav_row: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_row.append(
+            InlineKeyboardButton(text="◀️", callback_data=f"viewer_stats_page:{page - 1}")
+        )
+    if has_next:
+        nav_row.append(
+            InlineKeyboardButton(text="▶️", callback_data=f"viewer_stats_page:{page + 1}")
+        )
+    if nav_row:
+        buttons.append(nav_row)
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_status")])
+    return InlineKeyboardMarkup(buttons)
 
 
 def get_hardware_keyboard() -> InlineKeyboardMarkup:

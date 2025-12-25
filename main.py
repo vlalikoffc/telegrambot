@@ -14,9 +14,12 @@ from handlers import (
     handle_start,
     handle_text,
     handle_viewer_info_button,
+    handle_viewer_stats,
+    handle_viewer_stats_page,
     startup_reset_chats,
 )
 from live_update import live_update_loop
+from hardware import init_hardware_cache
 from state import load_state
 
 LOG_FILE = Path(__file__).with_name("bot.log")
@@ -48,11 +51,16 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(handle_show_hardware, pattern="^show_hardware$"))
     application.add_handler(CallbackQueryHandler(handle_back_to_status, pattern="^back_to_status$"))
     application.add_handler(CallbackQueryHandler(handle_viewer_info_button, pattern="^viewer_info$"))
+    application.add_handler(CallbackQueryHandler(handle_viewer_stats, pattern="^viewer_stats$"))
+    application.add_handler(
+        CallbackQueryHandler(handle_viewer_stats_page, pattern=r"^viewer_stats_page:(.+)$")
+    )
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 
 async def main_async() -> None:
     load_dotenv()
+    init_hardware_cache()
     configure_logging()
     LOGGER.info("Starting Telegram PC Status Bot (polling mode)")
 
