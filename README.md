@@ -92,3 +92,7 @@ python main.py
 ## Ограничения
 - Windows only (используются `pywin32`).
 - Заголовки окон не читаются и не логируются — только имя приложения.
+
+## License
+
+This project is released under the [MIT License](LICENSE). Please retain attribution to the original author (vlalikoffc) when redistributing or modifying the code.
