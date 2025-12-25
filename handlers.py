@@ -29,6 +29,16 @@ ANTISPAM_SECONDS = 10
 VIEW_DURATION_SECONDS = 300
 
 
+def _spawn(app: Application, coro) -> None:
+    async def runner() -> None:
+        try:
+            await coro
+        except Exception:  # pragma: no cover - logged globally
+            logging.exception("Callback task failed")
+
+    app.create_task(runner())
+
+
 def _can_reply(chat_state: Dict[str, Any]) -> bool:
     last_ts = chat_state.get("last_user_reply_ts")
     if not last_ts:
@@ -60,6 +70,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         chat_state,
         text,
         reply_markup=get_status_keyboard(),
+        state=state,
     )
 
     _mark_replied(chat_state)
@@ -86,6 +97,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chat_state,
         text,
         reply_markup=get_status_keyboard(),
+        state=state,
     )
     _mark_replied(chat_state)
     await save_state(state)
@@ -96,41 +108,48 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
     if not query or not query.message:
         return
     await query.answer()
-    chat_id = query.message.chat_id
-    user_id = query.from_user.id if query.from_user else None
-    if user_id is None:
-        return
 
-    state = context.application.bot_data["state"]
-    chat_state = ensure_chat_state(state, chat_id)
-    prune_expired_viewers(chat_state)
+    async def process() -> None:
+        state = context.application.bot_data["state"]
+        chat_id = query.message.chat_id
+        user_id = query.from_user.id if query.from_user else None
+        if user_id is None:
+            return
 
-    viewers = chat_state.setdefault("viewers", {})
-    now = time.time()
-    key = str(user_id)
-    current = viewers.get(key)
-    if current and current.get("view_expire") and current["view_expire"] > now:
-        return
+        chat_state = ensure_chat_state(state, chat_id)
+        prune_expired_viewers(chat_state)
 
-    viewers[key] = {
-        "view_start": now,
-        "view_expire": now + VIEW_DURATION_SECONDS,
-        "username": query.from_user.username if query.from_user else None,
-        "name": query.from_user.full_name if query.from_user else None,
-    }
-    chat_state["status_visible"] = True
-    chat_state["enabled"] = True
-    chat_state["view_mode"] = "status"
+        viewers = chat_state.setdefault("viewers", {})
+        now = time.time()
+        key = str(user_id)
+        current = viewers.get(key)
+        if current and current.get("view_expire") and current["view_expire"] > now:
+            return
 
-    text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
-    await send_or_edit_status_message(
-        context.application,
-        chat_id,
-        chat_state,
-        text,
-        reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
-    )
-    await save_state(state)
+        viewers[key] = {
+            "view_start": now,
+            "view_expire": now + VIEW_DURATION_SECONDS,
+            "username": query.from_user.username if query.from_user else None,
+            "name": query.from_user.full_name if query.from_user else None,
+        }
+        chat_state["status_visible"] = True
+        chat_state["enabled"] = True
+        chat_state["view_mode"] = "status"
+
+        text = build_status_text(
+            state, active_viewer_count=active_viewer_count_global(state)
+        )
+        await send_or_edit_status_message(
+            context.application,
+            chat_id,
+            chat_state,
+            text,
+            reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
+            state=state,
+        )
+        await save_state(state)
+
+    _spawn(context.application, process())
 
 
 async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,43 +158,48 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
         return
     user_id = query.from_user.id if query.from_user else None
     chat_id = query.message.chat_id
-    if user_id is None:
-        await query.answer()
-        return
     await query.answer()
 
-    state = context.application.bot_data.get("state")
-    if state is None:
-        return
+    async def process() -> None:
+        state = context.application.bot_data.get("state")
+        if user_id is None or state is None:
+            return
 
-    if user_id not in OWNER_IDS:
-        await send_status_reply_message(
+        if user_id not in OWNER_IDS:
+            await send_status_reply_message(
+                context.application,
+                chat_id,
+                ensure_chat_state(state, chat_id),
+                "❌ Недостаточно прав",
+                state=state,
+            )
+            return
+
+        details = active_viewer_details_global(state)
+        lines = []
+        if not details:
+            lines.append("👀 Детали наблюдателей (0):")
+            lines.append("• Сейчас никто не смотрит")
+        else:
+            lines.append(f"👀 Детали наблюдателей ({len(details)}):")
+            for info in details.values():
+                username = info.get("username")
+                if username:
+                    lines.append(f"• @{username}")
+                else:
+                    name = info.get("name") or "User (no username)"
+                    lines.append(f"• {name}")
+
+        text = "\n".join(lines)
+        await OWNER_INFO_MANAGER.send_or_update(
             context.application,
             chat_id,
             ensure_chat_state(state, chat_id),
-            "❌ Недостаточно прав",
+            text,
+            state=state,
         )
-        return
 
-    details = active_viewer_details_global(state)
-    lines = []
-    if not details:
-        lines.append("👀 Детали наблюдателей (0):")
-        lines.append("• Сейчас никто не смотрит")
-    else:
-        lines.append(f"👀 Детали наблюдателей ({len(details)}):")
-        for info in details.values():
-            username = info.get("username")
-            if username:
-                lines.append(f"• @{username}")
-            else:
-                name = info.get("name") or "User (no username)"
-                lines.append(f"• {name}")
-
-    text = "\n".join(lines)
-    await OWNER_INFO_MANAGER.send_or_update(
-        context.application, chat_id, ensure_chat_state(state, chat_id), text
-    )
+    _spawn(context.application, process())
 
 
 async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,36 +207,42 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
     if not query or not query.message:
         return
     await query.answer()
-    chat_id = query.message.chat_id
-    state = context.application.bot_data.get("state")
-    if state is None:
-        return
-    chat_state = ensure_chat_state(state, chat_id)
-    prune_expired_viewers(chat_state)
-    active = active_viewers(chat_state)
-    if not active:
-        chat_state["status_visible"] = False
-        chat_state["view_mode"] = "status"
+
+    async def process() -> None:
+        chat_id = query.message.chat_id
+        state = context.application.bot_data.get("state")
+        if state is None:
+            return
+        chat_state = ensure_chat_state(state, chat_id)
+        prune_expired_viewers(chat_state)
+        active = active_viewers(chat_state)
+        if not active:
+            chat_state["status_visible"] = False
+            chat_state["view_mode"] = "status"
+            await send_or_edit_status_message(
+                context.application,
+                chat_id,
+                chat_state,
+                HIDDEN_STATUS_TEXT,
+                reply_markup=get_status_keyboard(show_button=True),
+                state=state,
+            )
+            await save_state(state)
+            return
+
+        chat_state["view_mode"] = "hardware"
+        text = build_hardware_text()
         await send_or_edit_status_message(
             context.application,
             chat_id,
             chat_state,
-            HIDDEN_STATUS_TEXT,
-            reply_markup=get_status_keyboard(show_button=True),
+            text,
+            reply_markup=get_hardware_keyboard(),
+            state=state,
         )
         await save_state(state)
-        return
 
-    chat_state["view_mode"] = "hardware"
-    text = build_hardware_text()
-    await send_or_edit_status_message(
-        context.application,
-        chat_id,
-        chat_state,
-        text,
-        reply_markup=get_hardware_keyboard(),
-    )
-    await save_state(state)
+    _spawn(context.application, process())
 
 
 async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -220,36 +250,44 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
     if not query or not query.message:
         return
     await query.answer()
-    chat_id = query.message.chat_id
-    state = context.application.bot_data.get("state")
-    if state is None:
-        return
-    chat_state = ensure_chat_state(state, chat_id)
-    prune_expired_viewers(chat_state)
-    active = active_viewers(chat_state)
-    chat_state["view_mode"] = "status"
-    if not active:
-        chat_state["status_visible"] = False
+
+    async def process() -> None:
+        chat_id = query.message.chat_id
+        state = context.application.bot_data.get("state")
+        if state is None:
+            return
+        chat_state = ensure_chat_state(state, chat_id)
+        prune_expired_viewers(chat_state)
+        active = active_viewers(chat_state)
+        chat_state["view_mode"] = "status"
+        if not active:
+            chat_state["status_visible"] = False
+            await send_or_edit_status_message(
+                context.application,
+                chat_id,
+                chat_state,
+                HIDDEN_STATUS_TEXT,
+                reply_markup=get_status_keyboard(show_button=True),
+                state=state,
+            )
+            await save_state(state)
+            return
+
+        chat_state["status_visible"] = True
+        text = build_status_text(
+            state, active_viewer_count=active_viewer_count_global(state)
+        )
         await send_or_edit_status_message(
             context.application,
             chat_id,
             chat_state,
-            HIDDEN_STATUS_TEXT,
-            reply_markup=get_status_keyboard(show_button=True),
+            text,
+            reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
+            state=state,
         )
         await save_state(state)
-        return
 
-    chat_state["status_visible"] = True
-    text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
-    await send_or_edit_status_message(
-        context.application,
-        chat_id,
-        chat_state,
-        text,
-        reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
-    )
-    await save_state(state)
+    _spawn(context.application, process())
 
 
 async def startup_reset_chats(app: Application, preexisting_chat_ids: set[int]) -> None:
@@ -287,6 +325,7 @@ async def startup_reset_chats(app: Application, preexisting_chat_ids: set[int]) 
             text,
             reply_markup=get_status_keyboard(),
             include_restart_notice=True,
+            state=state,
         )
 
     app.bot_data["startup_reset_done"] = True

@@ -4,10 +4,11 @@ import time
 from typing import Any, Dict, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import Application
 
 from config import GITHUB_URL
+from state import disable_chat
 
 
 class RateLimiter:
@@ -92,6 +93,7 @@ async def startup_reset_chat_session(
     hidden_text: str,
     reply_markup: Optional[InlineKeyboardMarkup],
     include_restart_notice: bool,
+    state: Optional[Dict[str, Any]] = None,
 ) -> None:
     await unpin_all_messages(app, chat_id)
     if include_restart_notice:
@@ -103,6 +105,7 @@ async def startup_reset_chat_session(
         hidden_text,
         reply_markup=reply_markup,
         pin=True,
+        state=state,
     )
 
 
@@ -113,6 +116,7 @@ async def send_and_pin_status_message(
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     pin: bool = True,
+    state: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
@@ -131,6 +135,9 @@ async def send_and_pin_status_message(
         logging.info("Chat %s: recreated message %s", chat_id, message.message_id)
     except RetryAfter as exc:
         _set_backoff(chat_state, exc.retry_after, "send", chat_id)
+    except (Forbidden, BadRequest) as exc:
+        logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
+        disable_chat(state, chat_id)
     except TelegramError as exc:
         logging.exception("Telegram error for chat %s on send: %s", chat_id, exc)
     except Exception as exc:
@@ -143,6 +150,7 @@ async def send_or_edit_status_message(
     chat_state: Dict[str, Any],
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> None:
     lock = _get_chat_lock(chat_id)
     async with lock:
@@ -164,6 +172,7 @@ async def send_or_edit_status_message(
                 chat_state,
                 text,
                 reply_markup=reply_markup,
+                state=state,
             )
             return
 
@@ -180,15 +189,18 @@ async def send_or_edit_status_message(
             logging.info("Chat %s: edited ok", chat_id)
         except RetryAfter as exc:
             _set_backoff(chat_state, exc.retry_after, "edit", chat_id)
+        except (Forbidden, BadRequest) as exc:
+            logging.warning("Chat %s: unrecoverable edit error: %s", chat_id, exc)
+            disable_chat(state, chat_id)
         except TelegramError as exc:
             logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
             await send_and_pin_status_message(
-                app, chat_id, chat_state, text, reply_markup=reply_markup
+                app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
             )
         except Exception as exc:
             logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
             await send_and_pin_status_message(
-                app, chat_id, chat_state, text, reply_markup=reply_markup
+                app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
             )
 
 
@@ -198,6 +210,7 @@ async def send_status_reply_message(
     chat_state: Dict[str, Any],
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     try:
         await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
@@ -207,6 +220,9 @@ async def send_status_reply_message(
         return message.message_id
     except RetryAfter as exc:
         _set_backoff(chat_state, exc.retry_after, "send", chat_id)
+    except (Forbidden, BadRequest) as exc:
+        logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
+        disable_chat(state, chat_id)
     except TelegramError as exc:
         logging.exception("Telegram error for chat %s on send: %s", chat_id, exc)
     except Exception as exc:

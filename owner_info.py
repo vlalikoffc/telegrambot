@@ -1,4 +1,5 @@
 import asyncio
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -36,7 +37,12 @@ class OwnerInfoManager:
                 self._entries.pop(chat_id, None)
 
     async def send_or_update(
-        self, app: Application, chat_id: int, chat_state: Dict[str, Any], text: str
+        self,
+        app: Application,
+        chat_id: int,
+        chat_state: Dict[str, Any],
+        text: str,
+        state: Optional[Dict[str, Any]] = None,
     ) -> None:
         entry = self._entries.get(chat_id)
         if entry and entry.text == text:
@@ -60,7 +66,9 @@ class OwnerInfoManager:
                 message_id = None
 
         if message_id is None:
-            message_id = await send_status_reply_message(app, chat_id, chat_state, text)
+            message_id = await send_status_reply_message(
+                app, chat_id, chat_state, text, state=state
+            )
             if message_id is None:
                 return
 

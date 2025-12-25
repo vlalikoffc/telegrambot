@@ -50,6 +50,19 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
     return chat_state
 
 
+def disable_chat(state: Dict[str, Any] | None, chat_id: int) -> None:
+    if state is None:
+        return
+    chat_state = ensure_chat_state(state, chat_id)
+    chat_state["enabled"] = False
+    chat_state["viewers"] = {}
+    chat_state["status_visible"] = False
+    chat_state["view_mode"] = "status"
+    chat_state["message_id"] = None
+    chat_state["last_sent_text"] = None
+    chat_state["backoff_until"] = None
+
+
 def active_viewers(chat_state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     viewers = chat_state.get("viewers") or {}
     now = time.time()

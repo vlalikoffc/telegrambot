@@ -24,12 +24,15 @@ async def update_status_for_chat(
     chat_state: Dict[str, Any],
     text: str,
     reply_markup=None,
+    state: Dict[str, Any] | None = None,
 ) -> None:
     logging.info("Chat %s: tick", chat_id)
     if not chat_state.get("message_id") and _should_pin(chat_state):
         # Will be created by send_or_edit_status_message
         pass
-    await send_or_edit_status_message(app, chat_id, chat_state, text, reply_markup=reply_markup)
+    await send_or_edit_status_message(
+        app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
+    )
 
 
 async def update_live_status_for_app(app: Application) -> None:
@@ -52,15 +55,16 @@ async def update_live_status_for_app(app: Application) -> None:
                     (
                         chat_id_str,
                         chat_state,
-                        update_status_for_chat(
-                            app,
-                            chat_id,
-                            chat_state,
-                            HIDDEN_STATUS_TEXT,
-                            reply_markup=get_status_keyboard(show_button=True),
-                        ),
-                    )
-                )
+                update_status_for_chat(
+                    app,
+                    chat_id,
+                    chat_state,
+                    HIDDEN_STATUS_TEXT,
+                    reply_markup=get_status_keyboard(show_button=True),
+                    state=state,
+                ),
+            )
+        )
             continue
         chat_state["status_visible"] = True
         if chat_state.get("view_mode") == "hardware":
@@ -80,6 +84,7 @@ async def update_live_status_for_app(app: Application) -> None:
                     chat_state,
                     text,
                     reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
+                    state=state,
                 ),
             )
         )
