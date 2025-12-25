@@ -41,15 +41,26 @@ def _set_backoff(chat_state: Dict[str, Any], retry_after: int, reason: str, chat
     logging.warning("Chat %s: backoff %s sec (%s)", chat_id, retry_after, reason)
 
 
-def get_status_keyboard(show_button: bool = True) -> InlineKeyboardMarkup:
+def get_status_keyboard(show_button: bool = True, include_hardware: bool = False) -> InlineKeyboardMarkup:
     rows = []
     first_row = []
     if show_button:
         first_row.append(InlineKeyboardButton(text="👁 Показать статус", callback_data="show_status"))
     first_row.append(InlineKeyboardButton(text="💻 GitHub проекта", url=GITHUB_URL))
     rows.append(first_row)
-    rows.append([InlineKeyboardButton(text="ℹ️ Больше информации", callback_data="viewer_info")])
+
+    second_row: list[InlineKeyboardButton] = []
+    if include_hardware:
+        second_row.append(InlineKeyboardButton(text="🖥️ Железо", callback_data="show_hardware"))
+    second_row.append(InlineKeyboardButton(text="ℹ️ Больше информации", callback_data="viewer_info"))
+    rows.append(second_row)
     return InlineKeyboardMarkup(rows)
+
+
+def get_hardware_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_status")]]
+    )
 
 
 async def unpin_all_messages(app: Application, chat_id: int) -> None:

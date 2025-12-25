@@ -8,6 +8,7 @@ from telegram.ext import Application, ContextTypes
 from config import OWNER_IDS
 from messages import (
     get_status_keyboard,
+    get_hardware_keyboard,
     send_or_edit_status_message,
     send_status_reply_message,
     startup_reset_chat_session,
@@ -15,11 +16,14 @@ from messages import (
 from state import (
     active_viewer_count_global,
     active_viewer_details_global,
+    active_viewers,
     ensure_chat_state,
     prune_expired_viewers,
     save_state,
 )
 from status import HIDDEN_STATUS_TEXT, build_status_text
+from hardware import build_hardware_text
+from owner_info import OWNER_INFO_MANAGER
 
 ANTISPAM_SECONDS = 10
 VIEW_DURATION_SECONDS = 300
@@ -46,6 +50,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_state["enabled"] = True
     chat_state["viewers"] = {}
     chat_state["status_visible"] = False
+    chat_state["view_mode"] = "status"
     chat_state["last_sent_text"] = None
     text = HIDDEN_STATUS_TEXT
 
@@ -69,6 +74,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_state = ensure_chat_state(state, chat_id)
     chat_state["chat_type"] = update.effective_chat.type
     chat_state["enabled"] = True
+    chat_state["view_mode"] = "status"
 
     if not _can_reply(chat_state):
         return
@@ -114,6 +120,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
     }
     chat_state["status_visible"] = True
     chat_state["enabled"] = True
+    chat_state["view_mode"] = "status"
 
     text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
     await send_or_edit_status_message(
@@ -121,7 +128,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
         chat_id,
         chat_state,
         text,
-        reply_markup=get_status_keyboard(show_button=False),
+        reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
     )
     await save_state(state)
 
@@ -151,10 +158,12 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
         return
 
     details = active_viewer_details_global(state)
+    lines = []
     if not details:
-        text = "👀 Детали наблюдателей (0):\n• Сейчас никто не смотрит"
+        lines.append("👀 Детали наблюдателей (0):")
+        lines.append("• Сейчас никто не смотрит")
     else:
-        lines = []
+        lines.append(f"👀 Детали наблюдателей ({len(details)}):")
         for info in details.values():
             username = info.get("username")
             if username:
@@ -162,14 +171,85 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
             else:
                 name = info.get("name") or "User (no username)"
                 lines.append(f"• {name}")
-        text = "\n".join([f"👀 Детали наблюдателей ({len(details)}):", *lines])
 
-    await send_status_reply_message(
+    text = "\n".join(lines)
+    await OWNER_INFO_MANAGER.send_or_update(
+        context.application, chat_id, ensure_chat_state(state, chat_id), text
+    )
+
+
+async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+    chat_id = query.message.chat_id
+    state = context.application.bot_data.get("state")
+    if state is None:
+        return
+    chat_state = ensure_chat_state(state, chat_id)
+    prune_expired_viewers(chat_state)
+    active = active_viewers(chat_state)
+    if not active:
+        chat_state["status_visible"] = False
+        chat_state["view_mode"] = "status"
+        await send_or_edit_status_message(
+            context.application,
+            chat_id,
+            chat_state,
+            HIDDEN_STATUS_TEXT,
+            reply_markup=get_status_keyboard(show_button=True),
+        )
+        await save_state(state)
+        return
+
+    chat_state["view_mode"] = "hardware"
+    text = build_hardware_text()
+    await send_or_edit_status_message(
         context.application,
         chat_id,
-        ensure_chat_state(state, chat_id),
+        chat_state,
         text,
+        reply_markup=get_hardware_keyboard(),
     )
+    await save_state(state)
+
+
+async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+    chat_id = query.message.chat_id
+    state = context.application.bot_data.get("state")
+    if state is None:
+        return
+    chat_state = ensure_chat_state(state, chat_id)
+    prune_expired_viewers(chat_state)
+    active = active_viewers(chat_state)
+    chat_state["view_mode"] = "status"
+    if not active:
+        chat_state["status_visible"] = False
+        await send_or_edit_status_message(
+            context.application,
+            chat_id,
+            chat_state,
+            HIDDEN_STATUS_TEXT,
+            reply_markup=get_status_keyboard(show_button=True),
+        )
+        await save_state(state)
+        return
+
+    chat_state["status_visible"] = True
+    text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
+    await send_or_edit_status_message(
+        context.application,
+        chat_id,
+        chat_state,
+        text,
+        reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
+    )
+    await save_state(state)
 
 
 async def startup_reset_chats(app: Application, preexisting_chat_ids: set[int]) -> None:

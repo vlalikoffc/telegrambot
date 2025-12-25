@@ -261,7 +261,7 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
 
     parts = [
         f"🖥️ Аптайм ПК (с запуска бота): {format_duration(uptime_seconds)}",
-        f"⌚ Время в Windows: {get_local_time_string()}",
+        f"⌚ Время на моём ПК: {get_local_time_string()}",
         f"🪟 Активное приложение: {display_name}",
         f"💬 Приписка: {tagline}",
     ]

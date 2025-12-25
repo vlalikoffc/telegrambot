@@ -47,6 +47,7 @@ async def update_live_status_for_app(app: Application) -> None:
         if not active:
             if chat_state.get("status_visible"):
                 chat_state["status_visible"] = False
+                chat_state["view_mode"] = "status"
                 tasks_info.append(
                     (
                         chat_id_str,
@@ -62,6 +63,8 @@ async def update_live_status_for_app(app: Application) -> None:
                 )
             continue
         chat_state["status_visible"] = True
+        if chat_state.get("view_mode") == "hardware":
+            continue
         try:
             text = build_status_text(state, active_viewer_count=global_active_count)
         except Exception as exc:
@@ -76,7 +79,7 @@ async def update_live_status_for_app(app: Application) -> None:
                     chat_id,
                     chat_state,
                     text,
-                    reply_markup=get_status_keyboard(show_button=False),
+                    reply_markup=get_status_keyboard(show_button=False, include_hardware=True),
                 ),
             )
         )

@@ -9,6 +9,8 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Mess
 
 from handlers import (
     handle_show_status_button,
+    handle_show_hardware,
+    handle_back_to_status,
     handle_start,
     handle_text,
     handle_viewer_info_button,
@@ -43,6 +45,8 @@ def build_application() -> Application:
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CallbackQueryHandler(handle_show_status_button, pattern="^show_status$"))
+    application.add_handler(CallbackQueryHandler(handle_show_hardware, pattern="^show_hardware$"))
+    application.add_handler(CallbackQueryHandler(handle_back_to_status, pattern="^back_to_status$"))
     application.add_handler(CallbackQueryHandler(handle_viewer_info_button, pattern="^viewer_info$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 

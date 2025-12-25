@@ -42,8 +42,11 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "last_user_reply_ts": None,
             "viewers": {},
             "status_visible": False,
+            "view_mode": "status",
         },
     )
+    if "view_mode" not in chat_state:
+        chat_state["view_mode"] = "status"
     return chat_state
 
 
