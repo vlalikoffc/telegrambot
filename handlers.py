@@ -542,47 +542,36 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
     logging.info("Callback received: BACK_TO_STATUS (chat=%s, user=%s)", chat_id, user_id)
-    rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
-    await query.answer(text="⏳ Подожди секунду" if rate_limited else None, show_alert=False)
-    if rate_limited:
-        return
-
-    lock = _get_callback_lock(chat_id)
-    if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
-        return
+    await query.answer()
 
     async def process() -> None:
         state_inner = context.application.bot_data.get("state")
         if state_inner is None:
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
-        lock_inner = _get_callback_lock(chat_id)
-        async with lock_inner:
-            prune_expired_viewers(chat_state_inner)
-            active = active_viewers(chat_state_inner)
-            old_view = chat_state_inner.get("view_mode")
-            _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
-            chat_state_inner["view_mode"] = ViewMode.STATUS.value
-            if not active:
-                chat_state_inner["status_visible"] = False
-                text = HIDDEN_STATUS_TEXT
-                reply_markup = get_status_keyboard(
-                    show_button=True, is_owner=is_owner(chat_id)
-                )
-            else:
-                chat_state_inner["status_visible"] = True
-                text = build_status_text(
-                    state_inner, active_viewer_count=active_viewer_count_global(state_inner)
-                )
-                reply_markup = get_status_keyboard(
-                    show_button=False,
-                    include_hardware=True,
-                    is_owner=is_owner(chat_id),
-                )
+        prune_expired_viewers(chat_state_inner)
+        active = active_viewers(chat_state_inner)
+        old_view = chat_state_inner.get("view_mode")
+        _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
+        chat_state_inner["view_mode"] = ViewMode.STATUS.value
+        if not active:
+            chat_state_inner["status_visible"] = False
+            text = HIDDEN_STATUS_TEXT
+            reply_markup = get_status_keyboard(show_button=True, is_owner=is_owner(chat_id))
+        else:
+            chat_state_inner["status_visible"] = True
+            text = build_status_text(
+                state_inner, active_viewer_count=active_viewer_count_global(state_inner)
+            )
+            reply_markup = get_status_keyboard(
+                show_button=False,
+                include_hardware=True,
+                is_owner=is_owner(chat_id),
+            )
 
         chat_state_inner["callback_in_progress"] = True
         logging.info("Callback EDIT start (BACK_TO_STATUS)")
+        logging.info("BACK_TO_STATUS forced transition executed (chat=%s)", chat_id)
         start_ts = time.monotonic()
         try:
             async with _UiBusy(context.application):
