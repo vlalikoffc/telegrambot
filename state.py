@@ -1,9 +1,13 @@
 import asyncio
 import json
+import logging
 import time
+from datetime import date
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict
+
+from windows import get_local_date_string
 
 
 class ViewMode(str, Enum):
@@ -13,12 +17,63 @@ class ViewMode(str, Enum):
     STATS = "stats"
 
 STATE_FILE = Path(__file__).with_name("state.json")
+STATS_DIR = STATE_FILE.parent
 STATE_LOCK = asyncio.Lock()
 
 
-def load_state() -> Dict[str, Any]:
+def _stats_filename_for_date(current_date: str) -> Path:
+    try:
+        parsed = date.fromisoformat(current_date)
+        return STATS_DIR / f"stats_{parsed.day:02d}_{parsed.month:02d}_{parsed.year:04d}.json"
+    except Exception:
+        return STATS_DIR / "stats_unknown.json"
+
+
+def _cleanup_old_stats_files(current_date: str) -> None:
+    desired = _stats_filename_for_date(current_date).name
+    for path in STATS_DIR.glob("stats_*.json"):
+        if path.name != desired:
+            try:
+                path.unlink()
+                logging.info("Daily stats date mismatch, deleting %s", path.name)
+            except OSError:
+                logging.warning("Failed to delete old stats file %s", path)
+
+
+def load_daily_stats(current_date: str) -> Dict[str, Any]:
+    _cleanup_old_stats_files(current_date)
+    stats_file = _stats_filename_for_date(current_date)
+    if not stats_file.exists():
+        logging.info("Loaded daily stats file: %s (new)", stats_file.name)
+        return {"date": current_date, "users": {}}
+    try:
+        with stats_file.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if data.get("date") != current_date:
+            logging.info("Daily stats date mismatch, resetting stats")
+            return {"date": current_date, "users": {}}
+        logging.info("Loaded daily stats file: %s", stats_file.name)
+        return {"date": current_date, "users": data.get("users", {})}
+    except (OSError, json.JSONDecodeError):
+        logging.warning("Failed to read stats file %s, resetting", stats_file)
+        return {"date": current_date, "users": {}}
+
+
+def save_daily_stats(stats: Dict[str, Any]) -> None:
+    current_date = stats.get("date") or get_local_date_string()
+    stats_file = _stats_filename_for_date(current_date)
+    try:
+        with stats_file.open("w", encoding="utf-8") as handle:
+            json.dump({"date": current_date, "users": stats.get("users", {})}, handle, ensure_ascii=False, indent=2)
+    except OSError:
+        logging.exception("Unable to save daily stats to %s", stats_file)
+
+
+def load_state(current_date: str | None = None) -> Dict[str, Any]:
+    current_date = current_date or get_local_date_string()
+    base = {"chats": {}, "apps": {}, "view_stats": load_daily_stats(current_date)}
     if not STATE_FILE.exists():
-        return {"chats": {}, "apps": {}, "view_stats": {"date": None, "users": {}}}
+        return base
     try:
         with STATE_FILE.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -26,11 +81,10 @@ def load_state() -> Dict[str, Any]:
             data["chats"] = {}
         if "apps" not in data:
             data["apps"] = {}
-        if "view_stats" not in data:
-            data["view_stats"] = {"date": None, "users": {}}
+        data["view_stats"] = load_daily_stats(current_date)
         return data
     except (OSError, json.JSONDecodeError):
-        return {"chats": {}, "apps": {}, "view_stats": {"date": None, "users": {}}}
+        return base
 
 
 async def save_state(state: Dict[str, Any]) -> None:
@@ -145,8 +199,8 @@ def ensure_app_state(state: Dict[str, Any], app_key: str) -> Dict[str, Any]:
 def ensure_view_stats(state: Dict[str, Any], current_date: str) -> Dict[str, Any]:
     stats = state.setdefault("view_stats", {"date": None, "users": {}})
     if stats.get("date") != current_date:
-        stats["date"] = current_date
-        stats["users"] = {}
+        stats = load_daily_stats(current_date)
+        state["view_stats"] = stats
     if "users" not in stats:
         stats["users"] = {}
     return stats
@@ -170,6 +224,7 @@ def record_view_event(
     entry["name"] = name or entry.get("name")
     entry["count"] = int(entry.get("count", 0)) + 1
     entry["last_view"] = timestamp
+    save_daily_stats(stats)
 
 
 def get_view_stats(state: Dict[str, Any], current_date: str) -> Dict[str, Any]:

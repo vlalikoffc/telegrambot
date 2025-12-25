@@ -1,4 +1,5 @@
 import asyncio
+import asyncio
 import logging
 import time
 from typing import Any, Dict
@@ -6,7 +7,13 @@ from typing import Any, Dict
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
-from analytics import build_stats_text, build_viewers_text, is_owner
+from analytics import (
+    add_recent_view,
+    build_recent_viewers_text,
+    build_stats_text,
+    is_owner,
+    prune_recent_views,
+)
 from messages import (
     get_status_keyboard,
     get_hardware_keyboard,
@@ -77,6 +84,13 @@ def _log_view_change(chat_id: int, old: str, new: str) -> None:
     if old == new:
         return
     logging.info("Chat %s: View change: %s -> %s", chat_id, old, new)
+
+
+def _get_recent_views(bot_data: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+    views = bot_data.setdefault("recent_views", {})
+    cleaned = prune_recent_views(views)
+    bot_data["recent_views"] = cleaned
+    return cleaned
 
 
 def _get_callback_lock(chat_id: int) -> asyncio.Lock:
@@ -204,6 +218,13 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
                     query.from_user.full_name if query.from_user else None,
                     now_ts,
                 )
+                add_recent_view(
+                    _get_recent_views(context.application.bot_data),
+                    user_id,
+                    query.from_user.username if query.from_user else None,
+                    query.from_user.full_name if query.from_user else None,
+                    now_ts,
+                )
                 chat_state["status_visible"] = True
                 chat_state["enabled"] = True
                 _log_view_change(chat_id, chat_state.get("view_mode"), ViewMode.STATUS.value)
@@ -272,8 +293,8 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
                 prune_expired_viewers(chat_state_inner)
                 chat_state_inner["view_mode"] = ViewMode.VIEWERS.value
                 chat_state_inner["stats_page"] = 0
-                stats = get_view_stats(state_inner, get_local_date_string())
-                text = build_viewers_text(stats)
+                recent_views = _get_recent_views(context.application.bot_data)
+                text = build_recent_viewers_text(recent_views)
                 await send_or_edit_status_message(
                     context.application,
                     chat_id,

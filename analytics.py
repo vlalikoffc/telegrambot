@@ -1,4 +1,6 @@
+import logging
 import math
+import time
 from typing import Any, Dict, List, Tuple
 
 from config import OWNER_IDS
@@ -15,12 +17,11 @@ def _format_user_display(entry: Dict[str, Any]) -> str:
     return name or "User (no username)"
 
 
-def build_viewers_text(stats: Dict[str, Any]) -> str:
-    users = stats.get("users", {})
-    if not users:
+def build_recent_viewers_text(recent_views: Dict[int, Dict[str, Any]]) -> str:
+    if not recent_views:
         return "👀 Просмотры статуса (0):\n• Пока никто не смотрел"
-    lines = [f"👀 Просмотры статуса ({len(users)}):"]
-    for entry in users.values():
+    lines = [f"👀 Просмотры статуса ({len(recent_views)}):"]
+    for entry in recent_views.values():
         lines.append(f"• {_format_user_display(entry)}")
     return "\n".join(lines)
 
@@ -56,3 +57,24 @@ def build_stats_text(stats: Dict[str, Any], page: int) -> str:
 
 def is_owner(user_id: int | None) -> bool:
     return user_id in OWNER_IDS
+
+
+RECENT_VIEW_WINDOW_SECONDS = 300
+
+
+def prune_recent_views(recent_views: Dict[int, Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    now = time.time()
+    before = len(recent_views)
+    cleaned = {
+        uid: info
+        for uid, info in recent_views.items()
+        if info.get("last_view") and now - info["last_view"] <= RECENT_VIEW_WINDOW_SECONDS
+    }
+    after = len(cleaned)
+    if before != after:
+        logging.info("Recent views cleaned: before=%s after=%s", before, after)
+    return cleaned
+
+
+def add_recent_view(recent_views: Dict[int, Dict[str, Any]], user_id: int, username: str | None, name: str | None, timestamp: float) -> None:
+    recent_views[user_id] = {"username": username, "name": name, "last_view": timestamp}

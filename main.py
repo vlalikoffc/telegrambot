@@ -21,6 +21,7 @@ from handlers import (
 from live_update import live_update_loop
 from hardware import init_hardware_cache
 from state import load_state
+from windows import get_local_date_string
 
 LOG_FILE = Path(__file__).with_name("bot.log")
 LOGGER = logging.getLogger(__name__)
@@ -65,10 +66,11 @@ async def main_async() -> None:
     LOGGER.info("Hardware cached before bot start")
     LOGGER.info("Starting Telegram PC Status Bot (polling mode)")
 
-    state = load_state()
+    state = load_state(get_local_date_string())
     preexisting_chat_ids = set(int(cid) for cid in state.get("chats", {}).keys())
     application = build_application()
     application.bot_data["state"] = state
+    application.bot_data["recent_views"] = {}
     register_handlers(application)
 
     await application.initialize()
