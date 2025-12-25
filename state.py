@@ -50,16 +50,22 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
             "last_sent_text": None,
             "backoff_until": None,
             "last_user_reply_ts": None,
+            "last_button_ts": {},
             "viewers": {},
             "status_visible": False,
             "view_mode": ViewMode.STATUS.value,
             "stats_page": 0,
+            "callback_in_progress": False,
         },
     )
     if chat_state.get("view_mode") not in {mode.value for mode in ViewMode}:
         chat_state["view_mode"] = ViewMode.STATUS.value
     if "stats_page" not in chat_state:
         chat_state["stats_page"] = 0
+    if "last_button_ts" not in chat_state:
+        chat_state["last_button_ts"] = {}
+    if "callback_in_progress" not in chat_state:
+        chat_state["callback_in_progress"] = False
     return chat_state
 
 

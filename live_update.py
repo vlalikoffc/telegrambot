@@ -79,6 +79,11 @@ async def update_live_status_for_app(app: Application) -> None:
             continue
 
         chat_state["status_visible"] = True
+        if chat_state.get("callback_in_progress"):
+            logging.info(
+                "Chat %s: live-update skipped (callback in progress)", chat_id
+            )
+            continue
         if chat_state.get("view_mode") != ViewMode.STATUS.value:
             logging.info(
                 "Chat %s: live-update skipped (view=%s)",
