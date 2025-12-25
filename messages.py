@@ -193,6 +193,8 @@ async def send_or_edit_status_message(
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     state: Optional[Dict[str, Any]] = None,
+    *,
+    skip_rate_limit: bool = False,
 ) -> None:
     lock = _get_chat_lock(chat_id)
     async with lock:
@@ -221,7 +223,8 @@ async def send_or_edit_status_message(
         )
         return
 
-    await RATE_LIMITER.wait("edit", 5.0, scope=str(chat_id))
+    if not skip_rate_limit:
+        await RATE_LIMITER.wait("edit", 5.0, scope=str(chat_id))
 
     need_send_instead = False
     async with lock:

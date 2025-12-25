@@ -188,75 +188,74 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
 
     async def process() -> None:
         start_ts = time.monotonic()
-        lock = _get_callback_lock(chat_id)
-        async with _UiBusy(context.application), lock:
-            chat_state["callback_in_progress"] = True
-            try:
-                prune_expired_viewers(chat_state)
-                if (
-                    chat_state.get("view_mode") == ViewMode.HARDWARE.value
-                    and chat_state.get("view_mode") != ViewMode.STATUS.value
-                ):
-                    logging.info(
-                        "Chat %s: callback ignored (hardware view active)", chat_id
-                    )
-                    return
+        lock_inner = _get_callback_lock(chat_id)
+        async with lock_inner:
+            prune_expired_viewers(chat_state)
+            if chat_state.get("view_mode") == ViewMode.HARDWARE.value:
+                logging.info("Chat %s: callback ignored (hardware view active)", chat_id)
+                return
 
-                viewers = chat_state.setdefault("viewers", {})
-                now_ts = time.time()
-                key = str(user_id)
-                current = viewers.get(key)
-                if current and current.get("view_expire") and current["view_expire"] > now_ts:
-                    return
+            viewers = chat_state.setdefault("viewers", {})
+            now_ts = time.time()
+            key = str(user_id)
+            current = viewers.get(key)
+            if current and current.get("view_expire") and current["view_expire"] > now_ts:
+                return
 
-                viewers[key] = {
-                    "view_start": now_ts,
-                    "view_expire": now_ts + VIEW_DURATION_SECONDS,
-                    "username": query.from_user.username if query.from_user else None,
-                    "name": query.from_user.full_name if query.from_user else None,
-                }
-                record_view_event(
-                    state,
-                    get_local_date_string(),
-                    user_id,
-                    query.from_user.username if query.from_user else None,
-                    query.from_user.full_name if query.from_user else None,
-                    now_ts,
-                )
-                add_recent_view(
-                    _get_recent_views(context.application.bot_data),
-                    user_id,
-                    query.from_user.username if query.from_user else None,
-                    query.from_user.full_name if query.from_user else None,
-                    now_ts,
-                )
-                chat_state["status_visible"] = True
-                chat_state["enabled"] = True
-                _log_view_change(chat_id, chat_state.get("view_mode"), ViewMode.STATUS.value)
-                chat_state["view_mode"] = ViewMode.STATUS.value
-                chat_state["stats_page"] = 0
+            viewers[key] = {
+                "view_start": now_ts,
+                "view_expire": now_ts + VIEW_DURATION_SECONDS,
+                "username": query.from_user.username if query.from_user else None,
+                "name": query.from_user.full_name if query.from_user else None,
+            }
+            record_view_event(
+                state,
+                get_local_date_string(),
+                user_id,
+                query.from_user.username if query.from_user else None,
+                query.from_user.full_name if query.from_user else None,
+                now_ts,
+            )
+            add_recent_view(
+                _get_recent_views(context.application.bot_data),
+                user_id,
+                query.from_user.username if query.from_user else None,
+                query.from_user.full_name if query.from_user else None,
+                now_ts,
+            )
+            chat_state["status_visible"] = True
+            chat_state["enabled"] = True
+            _log_view_change(chat_id, chat_state.get("view_mode"), ViewMode.STATUS.value)
+            chat_state["view_mode"] = ViewMode.STATUS.value
+            chat_state["stats_page"] = 0
 
-                text = build_status_text(
-                    state, active_viewer_count=active_viewer_count_global(state)
-                )
+            text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
+            reply_markup = get_status_keyboard(
+                show_button=False,
+                include_hardware=True,
+                is_owner=is_owner(user_id),
+            )
+
+        chat_state["callback_in_progress"] = True
+        logging.info("Callback EDIT start (SHOW_STATUS)")
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id,
                     chat_state,
                     text,
-                    reply_markup=get_status_keyboard(
-                        show_button=False,
-                        include_hardware=True,
-                        is_owner=is_owner(user_id),
-                    ),
+                    reply_markup=reply_markup,
                     state=state,
+                    skip_rate_limit=True,
                 )
-                await save_state(state)
-            finally:
-                chat_state["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (SHOW_STATUS)", time.monotonic() - start_ts
-                )
+        finally:
+            chat_state["callback_in_progress"] = False
+            logging.info("Callback EDIT end (SHOW_STATUS)")
+            logging.info(
+                "Callback processed in %.2fs (SHOW_STATUS)", time.monotonic() - start_ts
+            )
+        await save_state(state)
 
     _spawn(context.application, process())
 
@@ -290,31 +289,37 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
             return
 
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
-        lock = _get_callback_lock(chat_id)
-        async with _UiBusy(context.application), lock:
-            chat_state_inner["callback_in_progress"] = True
-            start_ts = time.monotonic()
-            try:
-                prune_expired_viewers(chat_state_inner)
-                chat_state_inner["view_mode"] = ViewMode.VIEWERS.value
-                chat_state_inner["stats_page"] = 0
-                recent_views = _get_recent_views(context.application.bot_data)
-                text = build_recent_viewers_text(recent_views)
+        lock_inner = _get_callback_lock(chat_id)
+        async with lock_inner:
+            prune_expired_viewers(chat_state_inner)
+            chat_state_inner["view_mode"] = ViewMode.VIEWERS.value
+            chat_state_inner["stats_page"] = 0
+            recent_views = _get_recent_views(context.application.bot_data)
+            text = build_recent_viewers_text(recent_views)
+            reply_markup = get_viewer_keyboard(include_stats=True)
+
+        chat_state_inner["callback_in_progress"] = True
+        logging.info("Callback EDIT start (VIEWER_INFO)")
+        start_ts = time.monotonic()
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id,
                     chat_state_inner,
                     text,
-                    reply_markup=get_viewer_keyboard(include_stats=True),
+                    reply_markup=reply_markup,
                     state=state_inner,
+                    skip_rate_limit=True,
                 )
-                await save_state(state_inner)
-            finally:
-                chat_state_inner["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (VIEWER_INFO)",
-                    time.monotonic() - start_ts,
-                )
+        finally:
+            chat_state_inner["callback_in_progress"] = False
+            logging.info("Callback EDIT end (VIEWER_INFO)")
+            logging.info(
+                "Callback processed in %.2fs (VIEWER_INFO)",
+                time.monotonic() - start_ts,
+            )
+        await save_state(state_inner)
 
     _spawn(context.application, process())
 
@@ -349,18 +354,21 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
         if user_inner is None or state_inner is None:
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id_inner)
-        lock = _get_callback_lock(chat_id_inner)
-        async with _UiBusy(context.application), lock:
-            chat_state_inner["callback_in_progress"] = True
-            start_ts = time.monotonic()
-            try:
-                chat_state_inner["view_mode"] = ViewMode.STATS.value
-                stats = get_view_stats(state_inner, get_local_date_string())
-                total = max(1, (len(stats.get("users", {})) + 14) // 15)
-                page = max(0, min(chat_state_inner.get("stats_page", 0), total - 1))
-                chat_state_inner["stats_page"] = page
-                text = build_stats_text(stats, page)
-                reply_markup = get_stats_keyboard(page > 0, page < total - 1, page)
+        lock_inner = _get_callback_lock(chat_id_inner)
+        async with lock_inner:
+            chat_state_inner["view_mode"] = ViewMode.STATS.value
+            stats = get_view_stats(state_inner, get_local_date_string())
+            total = max(1, (len(stats.get("users", {})) + 14) // 15)
+            page = max(0, min(chat_state_inner.get("stats_page", 0), total - 1))
+            chat_state_inner["stats_page"] = page
+            text = build_stats_text(stats, page)
+            reply_markup = get_stats_keyboard(page > 0, page < total - 1, page)
+
+        chat_state_inner["callback_in_progress"] = True
+        logging.info("Callback EDIT start (VIEWER_STATS)")
+        start_ts = time.monotonic()
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id_inner,
@@ -368,14 +376,16 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text,
                     reply_markup=reply_markup,
                     state=state_inner,
+                    skip_rate_limit=True,
                 )
-                await save_state(state_inner)
-            finally:
-                chat_state_inner["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (VIEWER_STATS)",
-                    time.monotonic() - start_ts,
-                )
+        finally:
+            chat_state_inner["callback_in_progress"] = False
+            logging.info("Callback EDIT end (VIEWER_STATS)")
+            logging.info(
+                "Callback processed in %.2fs (VIEWER_STATS)",
+                time.monotonic() - start_ts,
+            )
+        await save_state(state_inner)
 
     _spawn(context.application, process())
 
@@ -419,18 +429,21 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
         if user_inner is None or state_inner is None:
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id_inner)
-        lock = _get_callback_lock(chat_id_inner)
-        async with _UiBusy(context.application), lock:
-            chat_state_inner["callback_in_progress"] = True
-            start_ts = time.monotonic()
-            try:
-                stats = get_view_stats(state_inner, get_local_date_string())
-                total = max(1, (len(stats.get("users", {})) + 14) // 15)
-                page_inner = max(0, min(page, total - 1))
-                chat_state_inner["view_mode"] = ViewMode.STATS.value
-                chat_state_inner["stats_page"] = page_inner
-                text = build_stats_text(stats, page_inner)
-                reply_markup = get_stats_keyboard(page_inner > 0, page_inner < total - 1, page_inner)
+        lock_inner = _get_callback_lock(chat_id_inner)
+        async with lock_inner:
+            stats = get_view_stats(state_inner, get_local_date_string())
+            total = max(1, (len(stats.get("users", {})) + 14) // 15)
+            page_inner = max(0, min(page, total - 1))
+            chat_state_inner["view_mode"] = ViewMode.STATS.value
+            chat_state_inner["stats_page"] = page_inner
+            text = build_stats_text(stats, page_inner)
+            reply_markup = get_stats_keyboard(page_inner > 0, page_inner < total - 1, page_inner)
+
+        chat_state_inner["callback_in_progress"] = True
+        logging.info("Callback EDIT start (VIEWER_STATS_PAGE)")
+        start_ts = time.monotonic()
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id_inner,
@@ -438,14 +451,16 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
                     text,
                     reply_markup=reply_markup,
                     state=state_inner,
+                    skip_rate_limit=True,
                 )
-                await save_state(state_inner)
-            finally:
-                chat_state_inner["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (VIEWER_STATS_PAGE)",
-                    time.monotonic() - start_ts,
-                )
+        finally:
+            chat_state_inner["callback_in_progress"] = False
+            logging.info("Callback EDIT end (VIEWER_STATS_PAGE)")
+            logging.info(
+                "Callback processed in %.2fs (VIEWER_STATS_PAGE)",
+                time.monotonic() - start_ts,
+            )
+        await save_state(state_inner)
 
     _spawn(context.application, process())
 
@@ -474,40 +489,46 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
         if state_inner is None:
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
-        lock = _get_callback_lock(chat_id)
-        async with _UiBusy(context.application), lock:
-            chat_state_inner["callback_in_progress"] = True
-            start_ts = time.monotonic()
-            try:
-                if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
-                    logging.info("Chat %s: Hardware view already active", chat_id)
-                    return
-                if chat_state_inner.get("view_mode") != ViewMode.STATUS.value:
-                    logging.info(
-                        "Chat %s: callback ignored (view=%s)",
-                        chat_id,
-                        chat_state_inner.get("view_mode"),
-                    )
-                    return
-                old_view = chat_state_inner.get("view_mode")
-                _log_view_change(chat_id, old_view, ViewMode.HARDWARE.value)
-                chat_state_inner["view_mode"] = ViewMode.HARDWARE.value
-                text = build_hardware_text()
+        lock_inner = _get_callback_lock(chat_id)
+        async with lock_inner:
+            if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
+                logging.info("Chat %s: Hardware view already active", chat_id)
+                return
+            if chat_state_inner.get("view_mode") != ViewMode.STATUS.value:
+                logging.info(
+                    "Chat %s: callback ignored (view=%s)",
+                    chat_id,
+                    chat_state_inner.get("view_mode"),
+                )
+                return
+            old_view = chat_state_inner.get("view_mode")
+            _log_view_change(chat_id, old_view, ViewMode.HARDWARE.value)
+            chat_state_inner["view_mode"] = ViewMode.HARDWARE.value
+            text = build_hardware_text()
+            reply_markup = get_hardware_keyboard()
+
+        chat_state_inner["callback_in_progress"] = True
+        logging.info("Callback EDIT start (SHOW_HARDWARE)")
+        start_ts = time.monotonic()
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id,
                     chat_state_inner,
                     text,
-                    reply_markup=get_hardware_keyboard(),
+                    reply_markup=reply_markup,
                     state=state_inner,
+                    skip_rate_limit=True,
                 )
-                await save_state(state_inner)
-            finally:
-                chat_state_inner["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (SHOW_HARDWARE)",
-                    time.monotonic() - start_ts,
-                )
+        finally:
+            chat_state_inner["callback_in_progress"] = False
+            logging.info("Callback EDIT end (SHOW_HARDWARE)")
+            logging.info(
+                "Callback processed in %.2fs (SHOW_HARDWARE)",
+                time.monotonic() - start_ts,
+            )
+        await save_state(state_inner)
 
     _spawn(context.application, process())
 
@@ -536,54 +557,52 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
         if state_inner is None:
             return
         chat_state_inner = ensure_chat_state(state_inner, chat_id)
-        lock = _get_callback_lock(chat_id)
-        async with _UiBusy(context.application), lock:
-            chat_state_inner["callback_in_progress"] = True
-            start_ts = time.monotonic()
-            try:
-                prune_expired_viewers(chat_state_inner)
-                active = active_viewers(chat_state_inner)
-                old_view = chat_state_inner.get("view_mode")
-                _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
-                chat_state_inner["view_mode"] = ViewMode.STATUS.value
-                if not active:
-                    chat_state_inner["status_visible"] = False
-                    await send_or_edit_status_message(
-                        context.application,
-                        chat_id,
-                        chat_state_inner,
-                        HIDDEN_STATUS_TEXT,
-                        reply_markup=get_status_keyboard(
-                            show_button=True, is_owner=is_owner(chat_id)
-                        ),
-                        state=state_inner,
-                    )
-                    await save_state(state_inner)
-                    return
-
+        lock_inner = _get_callback_lock(chat_id)
+        async with lock_inner:
+            prune_expired_viewers(chat_state_inner)
+            active = active_viewers(chat_state_inner)
+            old_view = chat_state_inner.get("view_mode")
+            _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
+            chat_state_inner["view_mode"] = ViewMode.STATUS.value
+            if not active:
+                chat_state_inner["status_visible"] = False
+                text = HIDDEN_STATUS_TEXT
+                reply_markup = get_status_keyboard(
+                    show_button=True, is_owner=is_owner(chat_id)
+                )
+            else:
                 chat_state_inner["status_visible"] = True
                 text = build_status_text(
                     state_inner, active_viewer_count=active_viewer_count_global(state_inner)
                 )
+                reply_markup = get_status_keyboard(
+                    show_button=False,
+                    include_hardware=True,
+                    is_owner=is_owner(chat_id),
+                )
+
+        chat_state_inner["callback_in_progress"] = True
+        logging.info("Callback EDIT start (BACK_TO_STATUS)")
+        start_ts = time.monotonic()
+        try:
+            async with _UiBusy(context.application):
                 await send_or_edit_status_message(
                     context.application,
                     chat_id,
                     chat_state_inner,
                     text,
-                    reply_markup=get_status_keyboard(
-                        show_button=False,
-                        include_hardware=True,
-                        is_owner=is_owner(chat_id),
-                    ),
+                    reply_markup=reply_markup,
                     state=state_inner,
+                    skip_rate_limit=True,
                 )
-                await save_state(state_inner)
-            finally:
-                chat_state_inner["callback_in_progress"] = False
-                logging.info(
-                    "Callback processed in %.2fs (BACK_TO_STATUS)",
-                    time.monotonic() - start_ts,
-                )
+        finally:
+            chat_state_inner["callback_in_progress"] = False
+            logging.info("Callback EDIT end (BACK_TO_STATUS)")
+            logging.info(
+                "Callback processed in %.2fs (BACK_TO_STATUS)",
+                time.monotonic() - start_ts,
+            )
+        await save_state(state_inner)
 
     _spawn(context.application, process())
 
