@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import os.path
 import pathlib
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -11,6 +12,11 @@ from typing import Callable, Iterable, Iterator, Optional
 import re
 
 from .plugin_errors import PluginSecurityError
+
+_ORIG_EXISTS = os.path.exists
+_ORIG_ISDIR = os.path.isdir
+_ORIG_ISFILE = os.path.isfile
+_ORIG_MAKEDIRS = os.makedirs
 
 
 def _has_env_segment(path: Path) -> bool:
@@ -134,7 +140,7 @@ class PluginFilesystem:
         write = any(flag in mode for flag in ("w", "a", "x", "+"))
         real_path = self._validate(path, operation="open", write=write)
         if write:
-            real_path.parent.mkdir(parents=True, exist_ok=True)
+            _ORIG_MAKEDIRS(str(real_path.parent), exist_ok=True)
         return self._raw_open(real_path, mode, *args, **kwargs)
 
     def read_text(self, path: str | Path, encoding: str = "utf-8") -> str:
@@ -143,7 +149,7 @@ class PluginFilesystem:
 
     def write_text(self, path: str | Path, data: str, encoding: str = "utf-8") -> None:
         real_path = self._validate(path, operation="write_text", write=True)
-        real_path.parent.mkdir(parents=True, exist_ok=True)
+        _ORIG_MAKEDIRS(str(real_path.parent), exist_ok=True)
         real_path.write_text(data, encoding=encoding)
 
     def listdir(self, path: str | Path = "self:/") -> list[str]:
@@ -152,7 +158,22 @@ class PluginFilesystem:
 
     def exists(self, path: str | Path) -> bool:
         real_path = self._validate(path, operation="exists", write=False)
-        return real_path.exists()
+        return _ORIG_EXISTS(str(real_path))
+
+    def isfile(self, path: str | Path) -> bool:
+        real_path = self._validate(path, operation="isfile", write=False)
+        return _ORIG_ISFILE(str(real_path))
+
+    def isdir(self, path: str | Path) -> bool:
+        real_path = self._validate(path, operation="isdir", write=False)
+        return _ORIG_ISDIR(str(real_path))
+
+    def mkdir(self, path: str | Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+        real_path = self._validate(path, operation="mkdir", write=True)
+        if parents:
+            _ORIG_MAKEDIRS(str(real_path), exist_ok=exist_ok)
+        else:
+            os.mkdir(str(real_path))
 
     def os_open(self, path: str | Path, flags: int, mode: int = 0o777) -> int:
         write_flags = (
@@ -165,7 +186,7 @@ class PluginFilesystem:
         write = bool(flags & write_flags)
         real_path = self._validate(path, operation="os.open", write=write)
         if write:
-            real_path.parent.mkdir(parents=True, exist_ok=True)
+            _ORIG_MAKEDIRS(str(real_path.parent), exist_ok=True)
         return self._raw_os_open(real_path, flags, mode)
 
     def set_openers(self, *, open_func: Callable, os_open_func: Callable) -> None:
@@ -233,15 +254,11 @@ class PluginSandbox(AbstractContextManager["PluginSandbox"]):
 
     def _guard_isfile(self, path: str | Path) -> bool:
         real_path = self._fs._validate(path, operation="isfile", write=False)
-        if self._original_os_path_isfile is None:
-            return Path(real_path).is_file()
-        return self._original_os_path_isfile(real_path)
+        return _ORIG_ISFILE(str(real_path))
 
     def _guard_isdir(self, path: str | Path) -> bool:
         real_path = self._fs._validate(path, operation="isdir", write=False)
-        if self._original_os_path_isdir is None:
-            return Path(real_path).is_dir()
-        return self._original_os_path_isdir(real_path)
+        return _ORIG_ISDIR(str(real_path))
 
     def __exit__(self, exc_type, exc, tb) -> None:
         import builtins
