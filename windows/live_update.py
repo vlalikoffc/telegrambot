@@ -70,7 +70,8 @@ async def update_live_status_for_app(app: Application) -> float:
     get_view_stats(state, current_date)
     global_active_count = active_viewer_count_global(state)
     update_interval_seconds = get_update_interval_seconds(global_active_count)
-    tasks_info: list[tuple[int, Dict[str, Any], Any]] = []
+    hidden_updates: list[tuple[int, Dict[str, Any]]] = []
+    active_updates: list[tuple[int, Dict[str, Any]]] = []
 
     for chat_id_str, chat_state in state.get("chats", {}).items():
         if not chat_state.get("enabled"):
@@ -83,22 +84,7 @@ async def update_live_status_for_app(app: Application) -> float:
             if chat_state.get("status_visible") or chat_state.get("view_mode") != ViewMode.STATUS.value:
                 chat_state["status_visible"] = False
                 chat_state["view_mode"] = ViewMode.STATUS.value
-                tasks_info.append(
-                    (
-                        chat_id,
-                        chat_state,
-                        update_status_for_chat(
-                            app,
-                            chat_id,
-                            chat_state,
-                            HIDDEN_STATUS_TEXT,
-                            reply_markup=get_status_keyboard(
-                                show_button=True, is_owner=chat_id in OWNER_IDS
-                            ),
-                            state=state,
-                        ),
-                    )
-                )
+                hidden_updates.append((chat_id, chat_state))
             continue
 
         chat_state["status_visible"] = True
@@ -115,15 +101,28 @@ async def update_live_status_for_app(app: Application) -> float:
             )
             continue
 
-        tasks_info.append(
-            (
+        active_updates.append((chat_id, chat_state))
+
+    if hidden_updates:
+        hidden_coroutines = [
+            update_status_for_chat(
+                app,
                 chat_id,
                 chat_state,
-                None,
+                HIDDEN_STATUS_TEXT,
+                reply_markup=get_status_keyboard(
+                    show_button=True, is_owner=chat_id in OWNER_IDS
+                ),
+                state=state,
             )
-        )
+            for chat_id, chat_state in hidden_updates
+        ]
+        hidden_results = await asyncio.gather(*hidden_coroutines, return_exceptions=True)
+        for task_result, (chat_id, _) in zip(hidden_results, hidden_updates):
+            if isinstance(task_result, Exception):
+                logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
 
-    if tasks_info:
+    if active_updates:
         snapshot = get_snapshot_for_publish(tracker)
         running_apps = get_running_apps(tracker)
         process_list = get_process_list(tracker)
@@ -155,10 +154,10 @@ async def update_live_status_for_app(app: Application) -> float:
                     state=state,
                     edit_min_interval=update_interval_seconds,
                 )
-                for chat_id, chat_state, _ in tasks_info
+                for chat_id, chat_state in active_updates
             ]
             results = await asyncio.gather(*coroutines, return_exceptions=True)
-            for task_result, (chat_id, _, _) in zip(results, tasks_info):
+            for task_result, (chat_id, _) in zip(results, active_updates):
                 if isinstance(task_result, Exception):
                     logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
 
