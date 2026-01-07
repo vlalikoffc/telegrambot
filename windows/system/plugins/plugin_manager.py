@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import importlib.util
 import logging
 from pathlib import Path
@@ -198,7 +199,9 @@ class PluginManager:
             sandbox = PluginSandbox(ctx.fs, self.logger)
             try:
                 with sandbox:
-                    await plugin.on_tick(ctx)
+                    result = plugin.on_tick(ctx)
+                    if inspect.isawaitable(result):
+                        await result
             except Exception as exc:
                 self._handle_failure(plugin, "on_tick", exc)
 
