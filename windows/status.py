@@ -7,10 +7,8 @@ from presence import PRESENCE_THRESHOLD_SECONDS, PRESENCE_TRACKER, presence_dura
 from runtime import get_bot_uptime_seconds
 from state import ensure_app_state
 from windows import (
-    get_active_process_info,
     get_last_input_idle_seconds,
     get_process_count,
-    get_process_uptime_seconds,
     get_local_time_string,
     get_window_title_for_pid,
     list_running_processes,
@@ -88,6 +86,8 @@ FAVORITE_APPS = {
 }
 
 ACTIVE_THRESHOLD_SECONDS = 300
+
+
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return str(timedelta(seconds=seconds))
@@ -152,9 +152,10 @@ def _detect_app_key(process_info: Dict[str, Any]) -> (str, Optional[str]):
     return resolve_app_key(name), None
 
 
-def _collect_running_apps() -> Dict[str, Dict[str, Any]]:
+def _collect_running_apps(processes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
     running: Dict[str, Dict[str, Any]] = {}
-    for proc_info in list_running_processes():
+    processes = processes or list_running_processes()
+    for proc_info in processes:
         app_key, detected_title = _detect_app_key(proc_info)
         if app_key == "unknown":
             continue
@@ -218,10 +219,10 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
     return [item["line"] for item in entries]
 
 
-def _detect_work_languages(current_pid: int) -> List[str]:
+def _detect_work_languages(processes: List[Dict[str, Any]], current_pid: int) -> List[str]:
     has_python = False
     has_js = False
-    for proc in list_running_processes():
+    for proc in processes:
         name = (proc.get("name") or "").lower()
         if not name:
             continue
@@ -242,22 +243,33 @@ def _detect_work_languages(current_pid: int) -> List[str]:
     return languages
 
 
-def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> str:
+def _format_update_interval(seconds: float) -> str:
+    if seconds.is_integer():
+        return str(int(seconds))
+    return f"{seconds:.1f}".rstrip("0").rstrip(".")
+
+
+def build_status_text(
+    state: Dict[str, Any],
+    snapshot: Optional[Dict[str, Any]],
+    active_viewer_count: int = 0,
+    update_interval_seconds: float = 1.0,
+    running_apps: Optional[Dict[str, Dict[str, Any]]] = None,
+    process_list: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     uptime_seconds = get_bot_uptime_seconds()
-    process_info = get_active_process_info()
-    process_name = process_info.get("name") or "Unknown"
-    title = process_info.get("title")
-    app_key, detected_title = _detect_app_key(process_info)
-    if app_key == "browser":
-        detected_title = None
-        title = None
-    display_name = resolve_display_name(app_key, process_name, detected_title or title)
-    tagline = resolve_tagline(app_key)
-
-    if app_key != "unknown":
-        _update_activity(state, app_key, detected_title or title)
-
-    app_uptime_seconds = get_process_uptime_seconds(process_info.get("create_time"))
+    snapshot = snapshot or {}
+    process_name = snapshot.get("process_name") or "Unknown"
+    app_key = snapshot.get("app_key") or resolve_app_key(process_name)
+    minecraft_version = snapshot.get("minecraft_version")
+    minecraft_server = snapshot.get("minecraft_server")
+    display_name = (
+        f"Minecraft {minecraft_version}" if app_key == "minecraft" and minecraft_version else "Minecraft"
+        if app_key == "minecraft"
+        else resolve_display_name(app_key, process_name)
+    )
+    tagline = snapshot.get("tagline") or resolve_tagline(app_key)
+    app_uptime_seconds = snapshot.get("app_uptime_seconds")
 
     parts = [
         f"🖥️ Аптайм ПК (с запуска бота): {format_duration(uptime_seconds)}",
@@ -268,6 +280,9 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
 
     if app_uptime_seconds is not None:
         parts.append(f"⏱️ Аптайм приложения: {format_duration(app_uptime_seconds)}")
+
+    if app_key == "minecraft" and minecraft_server:
+        parts.append(f"🌐 Сервер: {minecraft_server}")
 
     process_count = get_process_count()
     if process_count is not None:
@@ -285,7 +300,8 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
         afk_label = _format_presence_duration(presence_duration)
         parts.append(f"💤 За компьютером: отошёл ({afk_label})")
 
-    running_apps = _collect_running_apps()
+    if running_apps is None:
+        running_apps = _collect_running_apps(process_list)
     favorite_lines = _favorite_entries(state, app_key, running_apps)
 
     parts.append("")
@@ -293,7 +309,9 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
     parts.append("Избранные программы")
     parts.extend(favorite_lines)
 
-    work_languages = _detect_work_languages(os.getpid())
+    if process_list is None:
+        process_list = list_running_processes()
+    work_languages = _detect_work_languages(process_list, os.getpid())
     if work_languages:
         parts.append("")
         parts.append("🧑‍💻 Сейчас работаю:")
@@ -306,4 +324,5 @@ def build_status_text(state: Dict[str, Any], active_viewer_count: int = 0) -> st
         parts.append(f"👀 Сейчас наблюдают за статусом: {active_viewer_count}")
     else:
         parts.append("😴 Сейчас никто не смотрит")
+    parts.append(f"⚡ Обновление каждые {_format_update_interval(update_interval_seconds)} сек")
     return "\n".join(parts)

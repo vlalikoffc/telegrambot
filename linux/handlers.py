@@ -33,6 +33,13 @@ from state import (
     save_state,
 )
 from status import HIDDEN_STATUS_TEXT, build_status_text
+from tracker import (
+    get_process_list,
+    get_running_apps,
+    get_snapshot_for_publish,
+    init_tracker_state,
+)
+from live_update import get_update_interval_seconds
 from hardware import build_hardware_text
 from windows import get_local_date_string
 
@@ -229,7 +236,18 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
             chat_state["view_mode"] = ViewMode.STATUS.value
             chat_state["stats_page"] = 0
 
-            text = build_status_text(state, active_viewer_count=active_viewer_count_global(state))
+            tracker = init_tracker_state(context.application.bot_data)
+            snapshot = get_snapshot_for_publish(tracker)
+            viewer_count = active_viewer_count_global(state)
+            update_interval = get_update_interval_seconds(viewer_count)
+            text = build_status_text(
+                state,
+                snapshot,
+                active_viewer_count=viewer_count,
+                update_interval_seconds=update_interval,
+                running_apps=get_running_apps(tracker),
+                process_list=get_process_list(tracker),
+            )
             reply_markup = get_status_keyboard(
                 show_button=False,
                 include_hardware=True,
@@ -560,8 +578,17 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup = get_status_keyboard(show_button=True, is_owner=is_owner(chat_id))
         else:
             chat_state_inner["status_visible"] = True
+            tracker = init_tracker_state(context.application.bot_data)
+            snapshot = get_snapshot_for_publish(tracker)
+            viewer_count = active_viewer_count_global(state_inner)
+            update_interval = get_update_interval_seconds(viewer_count)
             text = build_status_text(
-                state_inner, active_viewer_count=active_viewer_count_global(state_inner)
+                state_inner,
+                snapshot,
+                active_viewer_count=viewer_count,
+                update_interval_seconds=update_interval,
+                running_apps=get_running_apps(tracker),
+                process_list=get_process_list(tracker),
             )
             reply_markup = get_status_keyboard(
                 show_button=False,

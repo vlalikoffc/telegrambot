@@ -21,6 +21,7 @@ from handlers import (
 from live_update import live_update_loop
 from hardware import init_hardware_cache
 from state import load_state
+from tracker import tracker_loop
 from windows import get_local_date_string
 
 LOG_FILE = Path(__file__).with_name("bot.log")
@@ -77,9 +78,11 @@ async def main_async() -> None:
     await startup_reset_chats(application, preexisting_chat_ids)
 
     live_task = None
+    tracker_task = None
     try:
         await application.start()
         await application.updater.start_polling()
+        tracker_task = asyncio.create_task(tracker_loop(application))
         live_task = asyncio.create_task(live_update_loop(application))
         wait_call = getattr(application.updater, "wait", None)
         if wait_call:
@@ -88,6 +91,10 @@ async def main_async() -> None:
             stop_event = asyncio.Event()
             await stop_event.wait()
     finally:
+        if tracker_task:
+            tracker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await tracker_task
         if live_task:
             live_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

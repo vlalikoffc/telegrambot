@@ -15,11 +15,20 @@ from state import (
     save_state,
 )
 from status import HIDDEN_STATUS_TEXT, build_status_text
+from tracker import get_process_list, get_running_apps, get_snapshot_for_publish, init_tracker_state
 from windows import get_local_date_string
 
 
 def _should_pin(chat_state: Dict[str, Any]) -> bool:
     return chat_state.get("chat_type") == "private"
+
+
+def get_update_interval_seconds(active_viewer_count: int) -> float:
+    if active_viewer_count <= 3:
+        return 1.0
+    if active_viewer_count <= 10:
+        return 2.5
+    return 4.0
 
 
 async def update_status_for_chat(
@@ -29,28 +38,38 @@ async def update_status_for_chat(
     text: str,
     reply_markup=None,
     state: Dict[str, Any] | None = None,
+    edit_min_interval: float = 5.0,
 ) -> None:
     logging.info("Chat %s: tick", chat_id)
     if not chat_state.get("message_id") and _should_pin(chat_state):
         # Will be created by send_or_edit_status_message
         pass
     await send_or_edit_status_message(
-        app, chat_id, chat_state, text, reply_markup=reply_markup, state=state
+        app,
+        chat_id,
+        chat_state,
+        text,
+        reply_markup=reply_markup,
+        state=state,
+        edit_min_interval=edit_min_interval,
     )
 
 
-async def update_live_status_for_app(app: Application) -> None:
+async def update_live_status_for_app(app: Application) -> float:
     state = app.bot_data.get("state")
     if state is None:
-        return
+        return 1.0
+
+    tracker = init_tracker_state(app.bot_data)
 
     if int(app.bot_data.get("ui_busy_count", 0)) > 0:
         logging.info("Live-update skipped (UI priority)")
-        return
+        return 1.0
 
     current_date = get_local_date_string()
     get_view_stats(state, current_date)
     global_active_count = active_viewer_count_global(state)
+    update_interval_seconds = get_update_interval_seconds(global_active_count)
     tasks_info: list[tuple[int, Dict[str, Any], Any]] = []
 
     for chat_id_str, chat_state in state.get("chats", {}).items():
@@ -96,16 +115,33 @@ async def update_live_status_for_app(app: Application) -> None:
             )
             continue
 
-        try:
-            text = build_status_text(state, active_viewer_count=global_active_count)
-        except Exception as exc:
-            logging.exception("Failed to build status text: %s", exc)
-            continue
-
         tasks_info.append(
             (
                 chat_id,
                 chat_state,
+                None,
+            )
+        )
+
+    if tasks_info:
+        snapshot = get_snapshot_for_publish(tracker)
+        running_apps = get_running_apps(tracker)
+        process_list = get_process_list(tracker)
+        try:
+            text = build_status_text(
+                state,
+                snapshot,
+                active_viewer_count=global_active_count,
+                update_interval_seconds=update_interval_seconds,
+                running_apps=running_apps,
+                process_list=process_list,
+            )
+        except Exception as exc:
+            logging.exception("Failed to build status text: %s", exc)
+            text = None
+
+        if text is not None:
+            coroutines = [
                 update_status_for_chat(
                     app,
                     chat_id,
@@ -117,26 +153,25 @@ async def update_live_status_for_app(app: Application) -> None:
                         is_owner=chat_id in OWNER_IDS,
                     ),
                     state=state,
-                ),
-            )
-        )
-
-    if tasks_info:
-        results = await asyncio.gather(
-            *(item[2] for item in tasks_info), return_exceptions=True
-        )
-        for task_result, (chat_id, _, _) in zip(results, tasks_info):
-            if isinstance(task_result, Exception):
-                logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
+                    edit_min_interval=update_interval_seconds,
+                )
+                for chat_id, chat_state, _ in tasks_info
+            ]
+            results = await asyncio.gather(*coroutines, return_exceptions=True)
+            for task_result, (chat_id, _, _) in zip(results, tasks_info):
+                if isinstance(task_result, Exception):
+                    logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
 
     await save_state(state)
+    return update_interval_seconds
 
 
 async def live_update_loop(app: Application) -> None:
     logging.info("Live update loop started")
     while True:
         try:
-            await update_live_status_for_app(app)
+            interval = await update_live_status_for_app(app)
         except Exception as exc:
             logging.exception("Live update loop error: %s", exc)
-        await asyncio.sleep(1)
+            interval = 1.0
+        await asyncio.sleep(interval)
