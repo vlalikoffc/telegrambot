@@ -288,6 +288,14 @@ def build_status_text(
         for lang in work_languages:
             parts.append(f"• {lang}")
 
+    parts.append("")
+    parts.append(FOOTER_TEXT)
+    if active_viewer_count > 0:
+        parts.append(f"👀 Сейчас наблюдают за статусом: {active_viewer_count}")
+    else:
+        parts.append("😴 Сейчас никто не смотрит")
+    parts.append(f"⚡ Обновление каждые {_format_update_interval(update_interval_seconds)} сек")
+
     if plugin_manager is not None:
         from system.plugins import RenderContext
         from system.plugins.render_context import (
@@ -330,12 +338,4 @@ def build_status_text(
         render_ctx = RenderContext(lines=list(parts), default_status=default_status)
         plugin_manager.on_render(render_ctx, mode="status")
         parts = render_ctx.lines
-
-    parts.append("")
-    parts.append(FOOTER_TEXT)
-    if active_viewer_count > 0:
-        parts.append(f"👀 Сейчас наблюдают за статусом: {active_viewer_count}")
-    else:
-        parts.append("😴 Сейчас никто не смотрит")
-    parts.append(f"⚡ Обновление каждые {_format_update_interval(update_interval_seconds)} сек")
     return "\n".join(parts)
