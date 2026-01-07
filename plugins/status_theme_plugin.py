@@ -4,14 +4,14 @@ from datetime import timedelta
 
 from system.plugins import PluginBase
 
-PLUGIN_API_VERSION = "1.0"
+PLUGIN_API_VERSION = "1.1"
 
 
 class StatusThemePlugin(PluginBase):
     name = "status_theme"
     version = "1.0.0"
     description = "Configurable status layout based on default status data"
-    author = "OpenAI"
+    author = "vlalikoffc"
 
     def on_render(self, render_ctx, ctx) -> None:
         default_status = getattr(render_ctx, "default_status", None)
