@@ -1,3 +1,4 @@
+from .constants import CORE_PLUGIN_API_VERSION
 from .plugin_base import PluginBase
 from .plugin_context import PluginContext
 from .plugin_errors import PluginSecurityError
@@ -6,6 +7,7 @@ from .render_context import RenderContext
 from .status_context import StatusContext
 
 __all__ = [
+    "CORE_PLUGIN_API_VERSION",
     "PluginBase",
     "PluginContext",
     "PluginManager",
