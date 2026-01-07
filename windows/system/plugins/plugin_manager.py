@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import importlib.util
 import logging
 from pathlib import Path
@@ -6,6 +7,7 @@ from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from .plugin_base import PluginBase
+from .constants import CORE_PLUGIN_API_VERSION
 from .filesystem import PluginFilesystem, PluginSandbox
 from .plugin_context import PluginContext, PluginStorage
 from .plugin_errors import PluginSecurityError
@@ -90,6 +92,22 @@ class PluginManager:
                 continue
             module = self._load_module(plugin_path)
             if not module:
+                continue
+            api_version = getattr(module, "PLUGIN_API_VERSION", None)
+            if api_version is None:
+                self.logger.error(
+                    "Plugin %s missing PLUGIN_API_VERSION (expected %s)",
+                    plugin_path.name,
+                    CORE_PLUGIN_API_VERSION,
+                )
+                continue
+            if api_version != CORE_PLUGIN_API_VERSION:
+                self.logger.error(
+                    "Plugin %s incompatible PLUGIN_API_VERSION=%s (expected %s)",
+                    plugin_path.name,
+                    api_version,
+                    CORE_PLUGIN_API_VERSION,
+                )
                 continue
             plugin_classes = self._discover_plugins(module)
             for plugin_cls in plugin_classes:
@@ -181,7 +199,9 @@ class PluginManager:
             sandbox = PluginSandbox(ctx.fs, self.logger)
             try:
                 with sandbox:
-                    await plugin.on_tick(ctx)
+                    result = plugin.on_tick(ctx)
+                    if inspect.isawaitable(result):
+                        await result
             except Exception as exc:
                 self._handle_failure(plugin, "on_tick", exc)
 

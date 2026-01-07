@@ -1,7 +1,7 @@
 import os
 import time
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from system.presence import PRESENCE_THRESHOLD_SECONDS, PRESENCE_TRACKER, presence_duration_seconds
 from system.runtime import get_bot_uptime_seconds
@@ -118,7 +118,11 @@ def _update_activity(state: Dict[str, Any], app_key: str, title: Optional[str]) 
         app_state["last_title"] = title
 
 
-def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: Dict[str, Dict[str, Any]]) -> List[str]:
+def _favorite_entries_info(
+    state: Dict[str, Any],
+    active_app_key: str,
+    running_apps: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     now = time.time()
 
@@ -141,7 +145,6 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
         if not running:
             is_active = False
 
-        emoji = "▶️" if is_active else ("🟢" if running else "💤")
         if running:
             display_name = (
                 "Браузер"
@@ -153,12 +156,32 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
         entries.append(
             {
                 "order": last_active_ts or 0,
-                "line": f"{emoji} {display_name}",
+                "name": display_name,
+                "running": running,
+                "active": is_active,
             }
         )
 
     entries.sort(key=lambda item: item["order"], reverse=True)
-    return [item["line"] for item in entries]
+    return entries
+
+
+def _favorite_entries(
+    state: Dict[str, Any],
+    active_app_key: str,
+    running_apps: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    entries = _favorite_entries_info(state, active_app_key, running_apps)
+    lines = []
+    for entry in entries:
+        if entry["active"]:
+            emoji = "▶️"
+        elif entry["running"]:
+            emoji = "🟢"
+        else:
+            emoji = "💤"
+        lines.append(f"{emoji} {entry['name']}")
+    return lines
 
 
 def _detect_work_languages(processes: List[Dict[str, Any]], current_pid: int) -> List[str]:
@@ -249,6 +272,7 @@ def build_status_text(
     if running_apps is None:
         running_apps = _collect_running_apps(process_list)
     favorite_lines = _favorite_entries(state, app_key, running_apps)
+    favorite_info = _favorite_entries_info(state, app_key, running_apps)
 
     parts.append("")
     parts.append("")
@@ -264,16 +288,6 @@ def build_status_text(
         for lang in work_languages:
             parts.append(f"• {lang}")
 
-    if plugin_manager is not None:
-        try:
-            from system.plugins import RenderContext
-
-            render_ctx = RenderContext(lines=list(parts))
-            plugin_manager.on_render(render_ctx, mode="status")
-            parts = render_ctx.lines
-        except Exception:
-            pass
-
     parts.append("")
     parts.append(FOOTER_TEXT)
     if active_viewer_count > 0:
@@ -281,4 +295,47 @@ def build_status_text(
     else:
         parts.append("😴 Сейчас никто не смотрит")
     parts.append(f"⚡ Обновление каждые {_format_update_interval(update_interval_seconds)} сек")
+
+    if plugin_manager is not None:
+        from system.plugins import RenderContext
+        from system.plugins.render_context import (
+            DefaultStatus,
+            DefaultStatusActiveApp,
+            DefaultStatusFavorite,
+            DefaultStatusPresence,
+        )
+
+        default_status = DefaultStatus(
+            uptime_seconds=uptime_seconds,
+            local_time=get_local_time_string(),
+            active_app=DefaultStatusActiveApp(
+                key=app_key,
+                name=display_name,
+                tagline=tagline,
+                uptime_seconds=app_uptime_seconds,
+                minecraft_server=minecraft_server,
+                minecraft_client=minecraft_client,
+            ),
+            process_count=process_count,
+            presence=DefaultStatusPresence(
+                state=presence_info.state,
+                idle_seconds=idle_seconds,
+                duration_seconds=presence_duration,
+            ),
+            favorites=tuple(
+                DefaultStatusFavorite(
+                    name=entry["name"],
+                    running=entry["running"],
+                    active=entry["active"],
+                )
+                for entry in favorite_info
+            ),
+            work_languages=tuple(work_languages),
+            footer_text=FOOTER_TEXT,
+            viewer_count=active_viewer_count,
+            update_interval_seconds=update_interval_seconds,
+        )
+        render_ctx = RenderContext(lines=list(parts), default_status=default_status)
+        plugin_manager.on_render(render_ctx, mode="status")
+        parts = render_ctx.lines
     return "\n".join(parts)
