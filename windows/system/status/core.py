@@ -269,7 +269,7 @@ def build_status_text(
             from system.plugins import RenderContext
 
             render_ctx = RenderContext(lines=list(parts))
-            plugin_manager.on_render(render_ctx)
+            plugin_manager.on_render(render_ctx, mode="status")
             parts = render_ctx.lines
         except Exception:
             pass

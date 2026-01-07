@@ -4,6 +4,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from .filesystem import PluginFilesystem
+from .status_context import StatusContext
+
 
 class PluginStorage:
     def __init__(self, path: Path) -> None:
@@ -53,6 +56,8 @@ class PluginContext:
         config: Dict[str, Any],
         safe_state: Dict[str, Any],
         storage: PluginStorage,
+        fs: PluginFilesystem,
+        status: StatusContext,
         platform: str,
         request_update: Callable[[], None],
     ) -> None:
@@ -60,6 +65,8 @@ class PluginContext:
         self.config = config
         self.safe_state = safe_state
         self.storage = storage
+        self.fs = fs
+        self.status = status
         self.platform = platform
         self._request_update = request_update
         self.clock = Clock()

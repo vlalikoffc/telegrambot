@@ -6,9 +6,11 @@ from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from .plugin_base import PluginBase
+from .filesystem import PluginFilesystem, PluginSandbox
 from .plugin_context import PluginContext, PluginStorage
-from .plugin_errors import PluginError
+from .plugin_errors import PluginSecurityError
 from .render_context import RenderContext
+from .status_context import StatusContext
 
 
 class PluginManager:
@@ -28,7 +30,6 @@ class PluginManager:
         self._disabled: set[str] = set()
         self._failures: Dict[str, int] = {}
         self._update_requested = False
-        self._storage_dir = base_dir / "plugins" / ".storage"
         self.logger = logging.getLogger("plugins")
 
     def request_update(self) -> None:
@@ -39,13 +40,18 @@ class PluginManager:
         self._update_requested = False
         return requested
 
-    def _build_context(self, plugin: PluginBase) -> PluginContext:
-        storage = PluginStorage(self._storage_dir / f"{plugin.name}.json")
+    def _build_context(self, plugin: PluginBase, status: StatusContext) -> PluginContext:
+        fs = PluginFilesystem(self._base_dir, plugin.name, self.logger)
+        plugin_dir = fs.plugin_dir
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        storage = PluginStorage(plugin_dir / "storage.json")
         return PluginContext(
             logger=logging.getLogger(f"plugin.{plugin.name}"),
             config=self._config,
             safe_state=self._safe_state_provider(),
             storage=storage,
+            fs=fs,
+            status=status,
             platform=self._platform,
             request_update=self.request_update,
         )
@@ -57,6 +63,16 @@ class PluginManager:
     def _handle_failure(self, plugin: PluginBase, hook: str, exc: Exception) -> None:
         count = self._failures.get(plugin.name, 0) + 1
         self._failures[plugin.name] = count
+        if isinstance(exc, PluginSecurityError):
+            self.logger.error(
+                "SECURITY VIOLATION: plugin=%s hook=%s path=%s operation=%s",
+                plugin.name,
+                hook,
+                exc.path,
+                exc.operation,
+            )
+            self._disable_plugin(plugin, "security violation")
+            return
         self.logger.exception("Plugin %s failed in %s: %s", plugin.name, hook, exc)
         if count >= 3:
             self._disable_plugin(plugin, f"repeated failures in {hook}")
@@ -77,8 +93,23 @@ class PluginManager:
                 continue
             plugin_classes = self._discover_plugins(module)
             for plugin_cls in plugin_classes:
+                plugin_name = getattr(plugin_cls, "name", None) or plugin_cls.__name__
                 try:
-                    plugin = plugin_cls()
+                    sandbox = PluginSandbox(
+                        PluginFilesystem(self._base_dir, plugin_name, self.logger),
+                        self.logger,
+                    )
+                    with sandbox:
+                        plugin = plugin_cls()
+                except PluginSecurityError as exc:
+                    self.logger.error(
+                        "SECURITY VIOLATION: plugin=%s hook=init path=%s operation=%s",
+                        plugin_name,
+                        exc.path,
+                        exc.operation,
+                    )
+                    self._disabled.add(plugin_name)
+                    continue
                 except Exception as exc:
                     self.logger.exception("Failed to instantiate plugin %s: %s", plugin_cls, exc)
                     continue
@@ -89,13 +120,27 @@ class PluginManager:
             self._call_hook(plugin, "on_load")
 
     def _load_module(self, path: Path) -> Optional[ModuleType]:
+        sandbox = PluginSandbox(
+            PluginFilesystem(self._base_dir, path.stem, self.logger),
+            self.logger,
+        )
         try:
-            spec = importlib.util.spec_from_file_location(path.stem, path)
-            if not spec or not spec.loader:
-                return None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
+            with sandbox:
+                spec = importlib.util.spec_from_file_location(path.stem, path)
+                if not spec or not spec.loader:
+                    return None
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+        except PluginSecurityError as exc:
+            self.logger.error(
+                "SECURITY VIOLATION: plugin=%s hook=load_module path=%s operation=%s",
+                path.stem,
+                exc.path,
+                exc.operation,
+            )
+            self._disabled.add(path.stem)
+            return None
         except Exception as exc:
             self.logger.exception("Failed to load plugin module %s: %s", path.name, exc)
             return None
@@ -107,30 +152,36 @@ class PluginManager:
                 plugins.append(obj)
         return plugins
 
-    def _call_hook(self, plugin: PluginBase, hook: str, *args) -> None:
+    def _call_hook(self, plugin: PluginBase, hook: str, *args, status: Optional[StatusContext] = None) -> None:
         if plugin.name in self._disabled:
             return
-        ctx = self._build_context(plugin)
+        status_ctx = status or StatusContext(mode="status", _render=None)
+        ctx = self._build_context(plugin, status_ctx)
+        sandbox = PluginSandbox(ctx.fs, self.logger)
         try:
-            handler = getattr(plugin, hook)
-            handler(*args, ctx)
+            with sandbox:
+                handler = getattr(plugin, hook)
+                handler(*args, ctx)
         except Exception as exc:
             self._handle_failure(plugin, hook, exc)
 
     def on_snapshot(self, snapshot: Dict[str, Any]) -> None:
         for plugin in self._iter_plugins():
             snapshot.setdefault("plugins", {}).setdefault(plugin.name, {})
-            self._call_hook(plugin, "on_snapshot", snapshot)
+            self._call_hook(plugin, "on_snapshot", snapshot, status=StatusContext(mode="status", _render=None))
 
-    def on_render(self, render_ctx: RenderContext) -> None:
+    def on_render(self, render_ctx: RenderContext, mode: str = "status") -> None:
         for plugin in self._iter_plugins():
-            self._call_hook(plugin, "on_render", render_ctx)
+            status_ctx = StatusContext(mode=mode, _render=render_ctx)
+            self._call_hook(plugin, "on_render", render_ctx, status=status_ctx)
 
     async def on_tick(self) -> None:
         for plugin in self._iter_plugins():
-            ctx = self._build_context(plugin)
+            ctx = self._build_context(plugin, StatusContext(mode="status", _render=None))
+            sandbox = PluginSandbox(ctx.fs, self.logger)
             try:
-                await plugin.on_tick(ctx)
+                with sandbox:
+                    await plugin.on_tick(ctx)
             except Exception as exc:
                 self._handle_failure(plugin, "on_tick", exc)
 
