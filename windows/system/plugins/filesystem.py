@@ -233,11 +233,15 @@ class PluginSandbox(AbstractContextManager["PluginSandbox"]):
 
     def _guard_isfile(self, path: str | Path) -> bool:
         real_path = self._fs._validate(path, operation="isfile", write=False)
-        return Path(real_path).is_file()
+        if self._original_os_path_isfile is None:
+            return Path(real_path).is_file()
+        return self._original_os_path_isfile(real_path)
 
     def _guard_isdir(self, path: str | Path) -> bool:
         real_path = self._fs._validate(path, operation="isdir", write=False)
-        return Path(real_path).is_dir()
+        if self._original_os_path_isdir is None:
+            return Path(real_path).is_dir()
+        return self._original_os_path_isdir(real_path)
 
     def __exit__(self, exc_type, exc, tb) -> None:
         import builtins
