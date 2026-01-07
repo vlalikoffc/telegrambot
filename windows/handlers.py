@@ -27,6 +27,7 @@ from state import (
     active_viewer_count_global,
     active_viewers,
     ensure_chat_state,
+    format_chat_label,
     get_view_stats,
     prune_expired_viewers,
     record_view_event,
@@ -65,6 +66,18 @@ class _UiBusy:
         self.app.bot_data[_UI_BUSY_KEY] = next_val
 
 
+def _update_chat_identity(chat_state: Dict[str, Any], chat, user) -> None:
+    if chat_state.get("chat_type") != chat.type:
+        chat_state["chat_type"] = chat.type
+    if chat.type == "private":
+        if user:
+            chat_state["chat_username"] = user.username
+            chat_state["chat_name"] = user.full_name
+    else:
+        chat_state["chat_username"] = getattr(chat, "username", None)
+        chat_state["chat_name"] = getattr(chat, "title", None)
+
+
 def _spawn(app: Application, coro) -> None:
     async def runner() -> None:
         try:
@@ -86,10 +99,10 @@ def _mark_replied(chat_state: Dict[str, Any]) -> None:
     chat_state["last_user_reply_ts"] = time.time()
 
 
-def _log_view_change(chat_id: int, old: str, new: str) -> None:
+def _log_view_change(chat_id: int, chat_state: Dict[str, Any], old: str, new: str) -> None:
     if old == new:
         return
-    logging.info("Chat %s: View change: %s -> %s", chat_id, old, new)
+    logging.info("Chat %s: View change: %s -> %s", format_chat_label(chat_id, chat_state), old, new)
 
 
 def _get_recent_views(bot_data: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
@@ -121,7 +134,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_id = update.effective_chat.id
     state = context.application.bot_data["state"]
     chat_state = ensure_chat_state(state, chat_id)
-    chat_state["chat_type"] = update.effective_chat.type
+    _update_chat_identity(chat_state, update.effective_chat, update.effective_user)
     chat_state["enabled"] = True
     chat_state["viewers"] = {}
     chat_state["status_visible"] = False
@@ -149,7 +162,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     state = context.application.bot_data["state"]
     chat_state = ensure_chat_state(state, chat_id)
-    chat_state["chat_type"] = update.effective_chat.type
+    _update_chat_identity(chat_state, update.effective_chat, update.effective_user)
     chat_state["enabled"] = True
     chat_state["view_mode"] = ViewMode.STATUS.value
     chat_state["stats_page"] = 0
@@ -176,9 +189,14 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
         return
     chat_id = query.message.chat_id
     user_id = query.from_user.id if query.from_user else None
-    logging.info("Callback received: SHOW_STATUS (chat=%s, user=%s)", chat_id, user_id)
+    chat_state = ensure_chat_state(context.application.bot_data["state"], chat_id)
+    _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: SHOW_STATUS (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     state = context.application.bot_data["state"]
-    chat_state = ensure_chat_state(state, chat_id)
     if user_id is None:
         await query.answer()
         return
@@ -190,7 +208,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
 
     lock = _get_callback_lock(chat_id)
     if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        logging.info("Chat %s: callback ignored (lock busy)", format_chat_label(chat_id, chat_state))
         return
 
     async def process() -> None:
@@ -199,7 +217,10 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
         async with lock_inner:
             prune_expired_viewers(chat_state)
             if chat_state.get("view_mode") == ViewMode.HARDWARE.value:
-                logging.info("Chat %s: callback ignored (hardware view active)", chat_id)
+                logging.info(
+                    "Chat %s: callback ignored (hardware view active)",
+                    format_chat_label(chat_id, chat_state),
+                )
                 return
 
             viewers = chat_state.setdefault("viewers", {})
@@ -233,7 +254,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
             )
             chat_state["status_visible"] = True
             chat_state["enabled"] = True
-            _log_view_change(chat_id, chat_state.get("view_mode"), ViewMode.STATUS.value)
+            _log_view_change(chat_id, chat_state, chat_state.get("view_mode"), ViewMode.STATUS.value)
             chat_state["view_mode"] = ViewMode.STATUS.value
             chat_state["stats_page"] = 0
 
@@ -287,7 +308,13 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
     chat_id = query.message.chat_id
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
-    logging.info("Callback received: VIEWER_INFO (chat=%s, user=%s)", chat_id, user_id)
+    if chat_state:
+        _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: VIEWER_INFO (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
     unauthorized = user_id is None or not is_owner(user_id)
     await query.answer(
@@ -299,7 +326,7 @@ async def handle_viewer_info_button(update: Update, context: ContextTypes.DEFAUL
 
     lock = _get_callback_lock(chat_id)
     if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        logging.info("Chat %s: callback ignored (lock busy)", format_chat_label(chat_id, chat_state))
         return
 
     async def process() -> None:
@@ -351,7 +378,13 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = query.from_user.id if query.from_user else None
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
-    logging.info("Callback received: VIEWER_STATS (chat=%s, user=%s)", chat_id, user_id)
+    if chat_state:
+        _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: VIEWER_STATS (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
     unauthorized = user_id is None or not is_owner(user_id)
     await query.answer(
@@ -363,7 +396,7 @@ async def handle_viewer_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     lock = _get_callback_lock(chat_id)
     if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        logging.info("Chat %s: callback ignored (lock busy)", format_chat_label(chat_id, chat_state))
         return
 
     async def process() -> None:
@@ -417,7 +450,13 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
     user_id = query.from_user.id if query.from_user else None
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
-    logging.info("Callback received: VIEWER_STATS_PAGE (chat=%s, user=%s)", chat_id, user_id)
+    if chat_state:
+        _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: VIEWER_STATS_PAGE (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
     unauthorized = user_id is None or not is_owner(user_id)
     await query.answer(
@@ -429,7 +468,7 @@ async def handle_viewer_stats_page(update: Update, context: ContextTypes.DEFAULT
 
     lock = _get_callback_lock(chat_id)
     if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        logging.info("Chat %s: callback ignored (lock busy)", format_chat_label(chat_id, chat_state))
         return
 
     async def process() -> None:
@@ -492,7 +531,13 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id if query.from_user else None
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
-    logging.info("Callback received: SHOW_HARDWARE (chat=%s, user=%s)", chat_id, user_id)
+    if chat_state:
+        _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: SHOW_HARDWARE (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     rate_limited = bool(chat_state and user_id is not None and _rate_limited_button(chat_state, user_id))
     await query.answer(text="⏳ Подожди секунду" if rate_limited else None, show_alert=False)
     if rate_limited:
@@ -500,7 +545,7 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
 
     lock = _get_callback_lock(chat_id)
     if lock.locked():
-        logging.info("Chat %s: callback ignored (lock busy)", chat_id)
+        logging.info("Chat %s: callback ignored (lock busy)", format_chat_label(chat_id, chat_state))
         return
 
     async def process() -> None:
@@ -511,17 +556,20 @@ async def handle_show_hardware(update: Update, context: ContextTypes.DEFAULT_TYP
         lock_inner = _get_callback_lock(chat_id)
         async with lock_inner:
             if chat_state_inner.get("view_mode") == ViewMode.HARDWARE.value:
-                logging.info("Chat %s: Hardware view already active", chat_id)
+                logging.info(
+                    "Chat %s: Hardware view already active",
+                    format_chat_label(chat_id, chat_state_inner),
+                )
                 return
             if chat_state_inner.get("view_mode") != ViewMode.STATUS.value:
                 logging.info(
                     "Chat %s: callback ignored (view=%s)",
-                    chat_id,
+                    format_chat_label(chat_id, chat_state_inner),
                     chat_state_inner.get("view_mode"),
                 )
                 return
             old_view = chat_state_inner.get("view_mode")
-            _log_view_change(chat_id, old_view, ViewMode.HARDWARE.value)
+            _log_view_change(chat_id, chat_state_inner, old_view, ViewMode.HARDWARE.value)
             chat_state_inner["view_mode"] = ViewMode.HARDWARE.value
             text = build_hardware_text()
             reply_markup = get_hardware_keyboard()
@@ -560,7 +608,13 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = query.from_user.id if query.from_user else None
     state = context.application.bot_data.get("state")
     chat_state = ensure_chat_state(state, chat_id) if state else None
-    logging.info("Callback received: BACK_TO_STATUS (chat=%s, user=%s)", chat_id, user_id)
+    if chat_state:
+        _update_chat_identity(chat_state, query.message.chat, query.from_user)
+    logging.info(
+        "Callback received: BACK_TO_STATUS (chat=%s, user=%s)",
+        format_chat_label(chat_id, chat_state),
+        user_id,
+    )
     await query.answer()
 
     async def process() -> None:
@@ -571,7 +625,7 @@ async def handle_back_to_status(update: Update, context: ContextTypes.DEFAULT_TY
         prune_expired_viewers(chat_state_inner)
         active = active_viewers(chat_state_inner)
         old_view = chat_state_inner.get("view_mode")
-        _log_view_change(chat_id, old_view, ViewMode.STATUS.value)
+        _log_view_change(chat_id, chat_state_inner, old_view, ViewMode.STATUS.value)
         chat_state_inner["view_mode"] = ViewMode.STATUS.value
         if not active:
             chat_state_inner["status_visible"] = False

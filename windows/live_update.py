@@ -11,6 +11,7 @@ from state import (
     ViewMode,
     active_viewer_count_global,
     active_viewers,
+    format_chat_label,
     get_view_stats,
     prune_expired_viewers,
     record_view_event,
@@ -61,7 +62,7 @@ async def update_status_for_chat(
     state: Dict[str, Any] | None = None,
     edit_min_interval: float = 5.0,
 ) -> None:
-    logging.info("Chat %s: tick", chat_id)
+    logging.info("Chat %s: tick", format_chat_label(chat_id, chat_state))
     if not chat_state.get("message_id") and _should_pin(chat_state):
         # Will be created by send_or_edit_status_message
         pass
@@ -113,13 +114,14 @@ async def update_live_status_for_app(app: Application) -> float:
         _ensure_daily_stats_for_viewers(state, chat_state, current_date)
         if chat_state.get("callback_in_progress"):
             logging.info(
-                "Chat %s: live-update skipped (callback in progress)", chat_id
+                "Chat %s: live-update skipped (callback in progress)",
+                format_chat_label(chat_id, chat_state),
             )
             continue
         if chat_state.get("view_mode") != ViewMode.STATUS.value:
             logging.info(
                 "Chat %s: live-update skipped (view=%s)",
-                chat_id,
+                format_chat_label(chat_id, chat_state),
                 chat_state.get("view_mode"),
             )
             continue
@@ -127,6 +129,12 @@ async def update_live_status_for_app(app: Application) -> float:
         active_updates.append((chat_id, chat_state))
 
     if hidden_updates:
+        hidden_targets = [
+            (chat_id, chat_state)
+            for chat_id, chat_state in hidden_updates
+            if chat_state.get("view_mode") == ViewMode.STATUS.value
+            and not chat_state.get("callback_in_progress")
+        ]
         hidden_coroutines = [
             update_status_for_chat(
                 app,
@@ -138,12 +146,17 @@ async def update_live_status_for_app(app: Application) -> float:
                 ),
                 state=state,
             )
-            for chat_id, chat_state in hidden_updates
+            for chat_id, chat_state in hidden_targets
         ]
-        hidden_results = await asyncio.gather(*hidden_coroutines, return_exceptions=True)
-        for task_result, (chat_id, _) in zip(hidden_results, hidden_updates):
-            if isinstance(task_result, Exception):
-                logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
+        if hidden_coroutines:
+            hidden_results = await asyncio.gather(*hidden_coroutines, return_exceptions=True)
+            for task_result, (chat_id, chat_state) in zip(hidden_results, hidden_targets):
+                if isinstance(task_result, Exception):
+                    logging.exception(
+                        "Chat %s: loop error: %s",
+                        format_chat_label(int(chat_id), chat_state),
+                        task_result,
+                    )
 
     if active_updates:
         snapshot = get_snapshot_for_publish(tracker)
@@ -180,9 +193,13 @@ async def update_live_status_for_app(app: Application) -> float:
                 for chat_id, chat_state in active_updates
             ]
             results = await asyncio.gather(*coroutines, return_exceptions=True)
-            for task_result, (chat_id, _) in zip(results, active_updates):
+            for task_result, (chat_id, chat_state) in zip(results, active_updates):
                 if isinstance(task_result, Exception):
-                    logging.exception("Chat %s: loop error: %s", int(chat_id), task_result)
+                    logging.exception(
+                        "Chat %s: loop error: %s",
+                        format_chat_label(int(chat_id), chat_state),
+                        task_result,
+                    )
 
     await save_state(state)
     return update_interval_seconds

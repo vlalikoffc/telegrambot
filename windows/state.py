@@ -100,6 +100,8 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
         {
             "enabled": False,
             "chat_type": None,
+            "chat_username": None,
+            "chat_name": None,
             "message_id": None,
             "last_sent_text": None,
             "backoff_until": None,
@@ -121,6 +123,16 @@ def ensure_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
     if "callback_in_progress" not in chat_state:
         chat_state["callback_in_progress"] = False
     return chat_state
+
+
+def format_chat_label(chat_id: int, chat_state: Dict[str, Any]) -> str:
+    username = chat_state.get("chat_username")
+    name = chat_state.get("chat_name")
+    if username:
+        return f"@{username} ({chat_id})"
+    if name:
+        return f"{name} ({chat_id})"
+    return str(chat_id)
 
 
 def disable_chat(state: Dict[str, Any] | None, chat_id: int) -> None:

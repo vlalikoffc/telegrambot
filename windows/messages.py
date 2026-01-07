@@ -8,7 +8,7 @@ from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import Application
 
 from config import GITHUB_URL
-from state import disable_chat
+from state import disable_chat, format_chat_label
 
 
 class RateLimiter:
@@ -43,7 +43,11 @@ def _bump_edit_delay(chat_state: Dict[str, Any], retry_after: int, chat_id: int)
     current = float(chat_state.get("edit_delay", 0.0) or 0.0)
     boosted = max(current, retry_after + 0.5)
     chat_state["edit_delay"] = min(boosted, MAX_EDIT_DELAY)
-    logging.warning("Chat %s: rate limit, edit delay %.1fs", chat_id, chat_state["edit_delay"])
+    logging.warning(
+        "Chat %s: rate limit, edit delay %.1fs",
+        format_chat_label(chat_id, chat_state),
+        chat_state["edit_delay"],
+    )
 
 
 def get_status_keyboard(
@@ -106,30 +110,42 @@ async def unpin_all_messages(app: Application, chat_id: int) -> None:
         logging.warning("Chat %s: unexpected unpin error: %s", chat_id, exc)
 
 
-async def unpin_status_message(app: Application, chat_id: int, message_id: int | None) -> None:
+async def unpin_status_message(
+    app: Application,
+    chat_id: int,
+    message_id: int | None,
+    chat_state: Optional[Dict[str, Any]] = None,
+) -> None:
     if not message_id:
         return
     try:
         await app.bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
-        logging.info("Chat %s: unpinned old status message %s", chat_id, message_id)
+        label = format_chat_label(chat_id, chat_state) if chat_state else str(chat_id)
+        logging.info("Chat %s: unpinned old status message %s", label, message_id)
     except TelegramError as exc:
-        logging.warning("Chat %s: failed to unpin message %s: %s", chat_id, message_id, exc)
+        label = format_chat_label(chat_id, chat_state) if chat_state else str(chat_id)
+        logging.warning("Chat %s: failed to unpin message %s: %s", label, message_id, exc)
     except Exception as exc:
         logging.warning(
             "Chat %s: unexpected unpin error for message %s: %s", chat_id, message_id, exc
         )
 
 
-async def send_restart_notice(app: Application, chat_id: int) -> None:
+async def send_restart_notice(
+    app: Application, chat_id: int, chat_state: Optional[Dict[str, Any]] = None
+) -> None:
     try:
         await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
         await app.bot.send_message(chat_id=chat_id, text="♻️ Бот был перезагружен.\nby vlal")
     except RetryAfter as exc:
-        logging.warning("Chat %s: retry after on restart notice: %s", chat_id, exc.retry_after)
+        label = format_chat_label(chat_id, chat_state) if chat_state else str(chat_id)
+        logging.warning("Chat %s: retry after on restart notice: %s", label, exc.retry_after)
     except TelegramError as exc:
-        logging.warning("Chat %s: failed to send restart notice: %s", chat_id, exc)
+        label = format_chat_label(chat_id, chat_state) if chat_state else str(chat_id)
+        logging.warning("Chat %s: failed to send restart notice: %s", label, exc)
     except Exception as exc:
-        logging.warning("Chat %s: unexpected restart notice error: %s", chat_id, exc)
+        label = format_chat_label(chat_id, chat_state) if chat_state else str(chat_id)
+        logging.warning("Chat %s: unexpected restart notice error: %s", label, exc)
 
 
 async def startup_reset_chat_session(
@@ -141,9 +157,9 @@ async def startup_reset_chat_session(
     include_restart_notice: bool,
     state: Optional[Dict[str, Any]] = None,
 ) -> None:
-    await unpin_status_message(app, chat_id, chat_state.get("message_id"))
+    await unpin_status_message(app, chat_id, chat_state.get("message_id"), chat_state=chat_state)
     if include_restart_notice:
-        await send_restart_notice(app, chat_id)
+        await send_restart_notice(app, chat_id, chat_state=chat_state)
     await send_and_pin_status_message(
         app,
         chat_id,
@@ -177,16 +193,36 @@ async def send_and_pin_status_message(
                 await app.bot.pin_chat_message(chat_id=chat_id, message_id=message.message_id)
             except TelegramError as exc:
                 logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
-        logging.info("Chat %s: recreated message %s", chat_id, message.message_id)
+        logging.info(
+            "Chat %s: recreated message %s",
+            format_chat_label(chat_id, chat_state),
+            message.message_id,
+        )
     except RetryAfter as exc:
-        logging.warning("Chat %s: retry after on send: %s", chat_id, exc.retry_after)
+        logging.warning(
+            "Chat %s: retry after on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc.retry_after,
+        )
     except (Forbidden, BadRequest) as exc:
-        logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
+        logging.warning(
+            "Chat %s: unrecoverable send error: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
         disable_chat(state, chat_id)
     except TelegramError as exc:
-        logging.exception("Telegram error for chat %s on send: %s", chat_id, exc)
+        logging.exception(
+            "Telegram error for chat %s on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
     except Exception as exc:
-        logging.exception("Unexpected error for chat %s on send: %s", chat_id, exc)
+        logging.exception(
+            "Unexpected error for chat %s on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
 
 
 async def send_or_edit_status_message(
@@ -206,7 +242,7 @@ async def send_or_edit_status_message(
         snapshot_last_text = chat_state.get("last_sent_text")
 
     if snapshot_message_id and snapshot_last_text == text:
-        logging.info("Chat %s: skip unchanged", chat_id)
+        logging.info("Chat %s: skip unchanged", format_chat_label(chat_id, chat_state))
         return
 
     if not snapshot_message_id:
@@ -231,7 +267,7 @@ async def send_or_edit_status_message(
         if not message_id:
             need_send_instead = True
         elif chat_state.get("last_sent_text") == text:
-            logging.info("Chat %s: skip unchanged", chat_id)
+            logging.info("Chat %s: skip unchanged", format_chat_label(chat_id, chat_state))
             return
         else:
             try:
@@ -247,20 +283,32 @@ async def send_or_edit_status_message(
                     chat_state["edit_delay"] = min(
                         max(edit_min_interval, current_delay - 0.5), MAX_EDIT_DELAY
                     )
-                logging.info("Chat %s: edited ok", chat_id)
+                logging.info("Chat %s: edited ok", format_chat_label(chat_id, chat_state))
                 return
             except RetryAfter as exc:
                 _bump_edit_delay(chat_state, exc.retry_after, chat_id)
                 return
             except (Forbidden, BadRequest) as exc:
-                logging.warning("Chat %s: unrecoverable edit error: %s", chat_id, exc)
+                logging.warning(
+                    "Chat %s: unrecoverable edit error: %s",
+                    format_chat_label(chat_id, chat_state),
+                    exc,
+                )
                 disable_chat(state, chat_id)
                 return
             except TelegramError as exc:
-                logging.exception("Chat %s: edit failed (%s), recreating", chat_id, exc)
+                logging.exception(
+                    "Chat %s: edit failed (%s), recreating",
+                    format_chat_label(chat_id, chat_state),
+                    exc,
+                )
                 need_send_instead = True
             except Exception as exc:
-                logging.exception("Chat %s: unexpected edit error: %s", chat_id, exc)
+                logging.exception(
+                    "Chat %s: unexpected edit error: %s",
+                    format_chat_label(chat_id, chat_state),
+                    exc,
+                )
                 need_send_instead = True
 
     if need_send_instead:
@@ -284,14 +332,30 @@ async def send_status_reply_message(
         )
         return message.message_id
     except RetryAfter as exc:
-        logging.warning("Chat %s: retry after on send: %s", chat_id, exc.retry_after)
+        logging.warning(
+            "Chat %s: retry after on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc.retry_after,
+        )
     except (Forbidden, BadRequest) as exc:
-        logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
+        logging.warning(
+            "Chat %s: unrecoverable send error: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
         disable_chat(state, chat_id)
     except TelegramError as exc:
-        logging.exception("Telegram error for chat %s on send: %s", chat_id, exc)
+        logging.exception(
+            "Telegram error for chat %s on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
     except Exception as exc:
-        logging.exception("Unexpected error for chat %s on send: %s", chat_id, exc)
+        logging.exception(
+            "Unexpected error for chat %s on send: %s",
+            format_chat_label(chat_id, chat_state),
+            exc,
+        )
     return None
 
 

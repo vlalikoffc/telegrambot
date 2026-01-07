@@ -11,20 +11,20 @@ PAGE_SIZE = 15
 RECENT_VIEW_WINDOW_SECONDS = 300
 
 
-def _format_user_display(entry: Dict[str, Any]) -> str:
+def _format_user_display(user_id: int, entry: Dict[str, Any]) -> str:
     username = entry.get("username")
+    name = entry.get("name") or "User (no username)"
     if username:
-        return f"@{username}"
-    name = entry.get("name")
-    return name or "User (no username)"
+        return f"{name} — @{username} (tg://user?id={user_id})"
+    return f"{name} (tg://user?id={user_id})"
 
 
 def build_recent_viewers_text(recent_views: Dict[int, Dict[str, Any]]) -> str:
     if not recent_views:
         return "👀 Просмотры статуса (0):\n• Пока никто не смотрел"
     lines = [f"👀 Просмотры статуса ({len(recent_views)}):"]
-    for entry in recent_views.values():
-        lines.append(f"• {_format_user_display(entry)}")
+    for user_id, entry in recent_views.items():
+        lines.append(f"• {_format_user_display(user_id, entry)}")
     return "\n".join(lines)
 
 
@@ -50,8 +50,8 @@ def build_stats_text(stats: Dict[str, Any], page: int) -> str:
     lines = ["📊 Статистика за сегодня"]
     if not slice_entries:
         lines.append("• Пока нет просмотров")
-    for _, entry in slice_entries:
-        display = _format_user_display(entry)
+    for user_id, entry in slice_entries:
+        display = _format_user_display(int(user_id), entry)
         count = entry.get("count", 0)
         last_view = entry.get("last_view")
         lines.append(f"{display} — {count} раз")
@@ -87,5 +87,9 @@ def add_recent_view(
     name: str | None,
     timestamp: float,
 ) -> None:
-    recent_views[user_id] = {"username": username, "name": name, "last_view": timestamp}
-
+    recent_views[user_id] = {
+        "user_id": user_id,
+        "username": username,
+        "name": name,
+        "last_view": timestamp,
+    }
