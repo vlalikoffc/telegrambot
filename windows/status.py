@@ -203,11 +203,14 @@ def _favorite_entries(state: Dict[str, Any], active_app_key: str, running_apps: 
             is_active = False
 
         emoji = "▶️" if is_active else ("🟢" if running else "💤")
-        display_name = (
-            "Браузер"
-            if app_key == "browser"
-            else app_state.get("last_title") or info.get("display") or DISPLAY_NAMES.get(app_key, app_key)
-        )
+        if running:
+            display_name = (
+                "Браузер"
+                if app_key == "browser"
+                else app_state.get("last_title") or info.get("display") or DISPLAY_NAMES.get(app_key, app_key)
+            )
+        else:
+            display_name = info.get("display") or DISPLAY_NAMES.get(app_key, app_key)
         entries.append(
             {
                 "order": last_active_ts or 0,
