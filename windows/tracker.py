@@ -26,6 +26,11 @@ CLIENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("Fabric Loader", re.compile(r"Fabric(?:\s+Loader)?(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
     ("Forge", re.compile(r"Forge(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
 )
+
+MIN_MINECRAFT_SERVER_SECONDS = 5.0
+MIN_MINECRAFT_SERVER_TICKS = 2
+BLOCKED_PORTS = {443}
+BLOCKED_IP_PREFIXES = {13, 18, 34}
 def _normalize_version(version: str) -> str:
     return re.sub(r"[a-z]+$", "", version, flags=re.IGNORECASE)
 
@@ -59,33 +64,51 @@ def _extract_mc_version(title: Optional[str]) -> Optional[str]:
     return None
 
 
-def _minecraft_server_for_pid(pid: int) -> Optional[str]:
+def _is_blocked_ip(ip: ipaddress.IPv4Address) -> bool:
+    return ip.is_private or ip.is_loopback or ip.packed[0] in BLOCKED_IP_PREFIXES
+
+
+def _resolve_domain(host: str) -> Optional[str]:
+    try:
+        hostname, _, _ = socket.gethostbyaddr(host)
+    except OSError:
+        return None
+    if hostname and hostname != host:
+        return hostname
+    return None
+
+
+def _collect_java_connections(pid: int) -> List[tuple[str, int, bool]]:
     try:
         proc = psutil.Process(pid)
+        if proc.name().lower() not in {"java.exe", "javaw.exe"}:
+            return []
+        results: List[tuple[str, int, bool]] = []
         for conn in proc.connections(kind="inet"):
             if not conn.raddr:
                 continue
             host = conn.raddr.ip if hasattr(conn.raddr, "ip") else conn.raddr[0]
             port = conn.raddr.port if hasattr(conn.raddr, "port") else conn.raddr[1]
-            if not host:
+            if not host or port in BLOCKED_PORTS:
                 continue
             try:
                 ip = ipaddress.ip_address(host)
-                if ip.is_private or ip.is_loopback:
-                    return "LAN"
+                if _is_blocked_ip(ip):
+                    if ip.is_private or ip.is_loopback:
+                        results.append(("LAN", port, True))
+                    continue
+                domain = _resolve_domain(host)
+                if domain:
+                    results.append((domain, port, True))
+                else:
+                    results.append((host, port, False))
             except ValueError:
-                return f"{host}:{port}"
-            try:
-                hostname, _, _ = socket.gethostbyaddr(host)
-                host = hostname or host
-            except OSError:
-                pass
-            return f"{host}:{port}"
+                results.append((host, port, True))
+        return results
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return None
+        return []
     except Exception:
-        return None
-    return None
+        return []
 
 
 def _detect_minecraft_title(pid: Optional[int]) -> Optional[str]:
@@ -122,6 +145,47 @@ def _detect_minecraft_client(
     return None
 
 
+def _select_persistent_server(
+    tracker: Dict[str, Any], pid: Optional[int], now_ts: float
+) -> Optional[str]:
+    if not pid:
+        return None
+    candidates = tracker.setdefault("server_candidates", {})
+    current_keys: set[tuple[str, int]] = set()
+    for host, port, is_domain in _collect_java_connections(pid):
+        key = (host, port)
+        current_keys.add(key)
+        entry = candidates.get(key)
+        if not entry:
+            candidates[key] = {
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+                "ticks": 1,
+                "is_domain": is_domain,
+            }
+        else:
+            entry["last_seen"] = now_ts
+            entry["ticks"] = int(entry.get("ticks", 0)) + 1
+            entry["is_domain"] = entry.get("is_domain") or is_domain
+
+    stale_keys = [key for key in candidates if key not in current_keys]
+    for key in stale_keys:
+        candidates.pop(key, None)
+
+    ordered = sorted(
+        candidates.items(),
+        key=lambda item: (not bool(item[1].get("is_domain")), item[0]),
+    )
+    for (host, port), entry in ordered:
+        duration = now_ts - float(entry.get("first_seen", now_ts))
+        ticks = int(entry.get("ticks", 0))
+        if duration >= MIN_MINECRAFT_SERVER_SECONDS and ticks >= MIN_MINECRAFT_SERVER_TICKS:
+            if host == "LAN":
+                return "LAN"
+            return f"{host}:{port}"
+    return None
+
+
 def _detect_active_snapshot() -> Dict[str, Any]:
     process_info = get_active_process_info()
     process_name = process_info.get("name") or "Unknown"
@@ -143,7 +207,7 @@ def _detect_active_snapshot() -> Dict[str, Any]:
     minecraft_client = (
         _detect_minecraft_client(minecraft_title, minecraft_version) if app_key == "minecraft" else None
     )
-    minecraft_server = _minecraft_server_for_pid(pid) if app_key == "minecraft" and pid else None
+    minecraft_server = None
     app_uptime_seconds = get_process_uptime_seconds(create_time)
 
     return {
@@ -216,6 +280,7 @@ def init_tracker_state(bot_data: Dict[str, Any]) -> Dict[str, Any]:
             "last_snapshot": None,
             "running_apps": {},
             "process_list": [],
+            "server_candidates": {},
         },
     )
     return tracker
@@ -259,6 +324,10 @@ async def tracker_loop(app) -> None:
         try:
             payload = await asyncio.to_thread(_collect_snapshot_payload)
             snapshot = payload["snapshot"]
+            now_ts = time.time()
+            if snapshot.get("app_key") == "minecraft":
+                server = _select_persistent_server(tracker, snapshot.get("pid"), now_ts)
+                snapshot["minecraft_server"] = server
             tracker["running_apps"] = payload["running_apps"]
             tracker["process_list"] = payload["process_list"]
             _update_latest_snapshot(tracker, snapshot)
