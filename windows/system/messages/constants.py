@@ -1,0 +1,1 @@
+MAX_EDIT_DELAY = 5.5

@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from handlers import (
+from system.handlers import (
     handle_show_status_button,
     handle_show_hardware,
     handle_back_to_status,
@@ -18,11 +18,12 @@ from handlers import (
     handle_viewer_stats_page,
     startup_reset_chats,
 )
-from live_update import live_update_loop
-from hardware import init_hardware_cache
-from state import load_state
-from tracker import tracker_loop
-from windows import get_local_date_string
+from system.live_update import live_update_loop
+from system.hardware import init_hardware_cache
+from system.state import active_viewer_count_global, load_state
+from system.tracker import tracker_loop
+from system.platform import get_local_date_string
+from system.plugins import PluginManager
 
 LOG_FILE = Path(__file__).with_name("bot.log")
 LOGGER = logging.getLogger(__name__)
@@ -72,18 +73,39 @@ async def main_async() -> None:
     application = build_application()
     application.bot_data["state"] = state
     application.bot_data["recent_views"] = {}
+
+    base_dir = Path(__file__).resolve().parents[1]
+
+    def safe_state_provider() -> dict:
+        current_state = application.bot_data.get("state") or {}
+        return {
+            "platform": "windows",
+            "viewer_count": active_viewer_count_global(current_state) if current_state else 0,
+        }
+
+    plugin_manager = PluginManager(
+        base_dir=base_dir,
+        config={},
+        platform="windows",
+        safe_state_provider=safe_state_provider,
+    )
+    plugin_manager.load_plugins()
+    application.bot_data["plugins"] = plugin_manager
+
     register_handlers(application)
 
     await application.initialize()
     await startup_reset_chats(application, preexisting_chat_ids)
 
     live_task = None
+    plugin_task = None
     tracker_task = None
     try:
         await application.start()
         await application.updater.start_polling()
         tracker_task = asyncio.create_task(tracker_loop(application))
         live_task = asyncio.create_task(live_update_loop(application))
+        plugin_task = asyncio.create_task(plugin_manager.tick_loop())
         wait_call = getattr(application.updater, "wait", None)
         if wait_call:
             await wait_call()
@@ -91,6 +113,10 @@ async def main_async() -> None:
             stop_event = asyncio.Event()
             await stop_event.wait()
     finally:
+        if plugin_task:
+            plugin_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await plugin_task
         if tracker_task:
             tracker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -99,6 +125,7 @@ async def main_async() -> None:
             live_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await live_task
+        plugin_manager.on_shutdown()
         await application.stop()
         await application.shutdown()
 
