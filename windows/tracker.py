@@ -3,7 +3,7 @@ import ipaddress
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import psutil
 
@@ -17,9 +17,6 @@ from windows import (
 )
 
 MC_VERSION_PATTERN = re.compile(r"\b(\d+\.\d+(?:\.\d+)?[a-z]?)\b")
-PENDING_SNAPSHOT_LIMIT = 20
-
-
 def _normalize_version(version: str) -> str:
     return re.sub(r"[a-z]+$", "", version, flags=re.IGNORECASE)
 
@@ -95,14 +92,6 @@ def _detect_minecraft_title(pid: Optional[int]) -> Optional[str]:
     if title and "minecraft" in title.lower():
         return title
     return None
-
-
-def _snapshot_signature(snapshot: Dict[str, Any]) -> Tuple[Any, ...]:
-    return (
-        snapshot.get("app_key"),
-        snapshot.get("minecraft_version"),
-        snapshot.get("minecraft_server"),
-    )
 
 
 def _detect_active_snapshot() -> Dict[str, Any]:
@@ -193,7 +182,6 @@ def init_tracker_state(bot_data: Dict[str, Any]) -> Dict[str, Any]:
         "tracker",
         {
             "last_snapshot": None,
-            "pending_snapshots": [],
             "running_apps": {},
             "process_list": [],
         },
@@ -214,11 +202,6 @@ def get_process_list(tracker: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def get_snapshot_for_publish(tracker: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    pending = tracker.get("pending_snapshots") or []
-    if pending:
-        snapshot = pending.pop(0)
-        tracker["pending_snapshots"] = pending
-        return snapshot
     return tracker.get("last_snapshot")
 
 
@@ -233,14 +216,7 @@ def _collect_snapshot_payload() -> Dict[str, Any]:
     }
 
 
-def _update_pending_snapshots(tracker: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
-    last_snapshot = tracker.get("last_snapshot")
-    if last_snapshot is None or _snapshot_signature(snapshot) != _snapshot_signature(last_snapshot):
-        pending = tracker.get("pending_snapshots") or []
-        pending.append(snapshot)
-        if len(pending) > PENDING_SNAPSHOT_LIMIT:
-            pending.pop(0)
-        tracker["pending_snapshots"] = pending
+def _update_latest_snapshot(tracker: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
     tracker["last_snapshot"] = snapshot
 
 
@@ -253,7 +229,7 @@ async def tracker_loop(app) -> None:
             snapshot = payload["snapshot"]
             tracker["running_apps"] = payload["running_apps"]
             tracker["process_list"] = payload["process_list"]
-            _update_pending_snapshots(tracker, snapshot)
+            _update_latest_snapshot(tracker, snapshot)
             state = app.bot_data.get("state")
             if state:
                 _update_app_activity(state, snapshot)

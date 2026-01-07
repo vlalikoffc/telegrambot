@@ -37,9 +37,11 @@ class RateLimiter:
 RATE_LIMITER = RateLimiter()
 
 
-def _set_backoff(chat_state: Dict[str, Any], retry_after: int, reason: str, chat_id: int) -> None:
-    chat_state["backoff_until"] = time.time() + retry_after + 1
-    logging.warning("Chat %s: backoff %s sec (%s)", chat_id, retry_after, reason)
+def _bump_edit_delay(chat_state: Dict[str, Any], retry_after: int, chat_id: int) -> None:
+    current = float(chat_state.get("edit_delay", 0.0) or 0.0)
+    boosted = max(current, retry_after + 0.5)
+    chat_state["edit_delay"] = min(boosted, 6.0)
+    logging.warning("Chat %s: rate limit, edit delay %.1fs", chat_id, chat_state["edit_delay"])
 
 
 def get_status_keyboard(
@@ -121,7 +123,7 @@ async def send_restart_notice(app: Application, chat_id: int) -> None:
         await RATE_LIMITER.wait("send", 2.0, scope=str(chat_id))
         await app.bot.send_message(chat_id=chat_id, text="♻️ Бот был перезагружен.\nby vlal")
     except RetryAfter as exc:
-        _set_backoff({}, exc.retry_after, "send_restart", chat_id)
+        logging.warning("Chat %s: retry after on restart notice: %s", chat_id, exc.retry_after)
     except TelegramError as exc:
         logging.warning("Chat %s: failed to send restart notice: %s", chat_id, exc)
     except Exception as exc:
@@ -167,7 +169,6 @@ async def send_and_pin_status_message(
         )
         chat_state["message_id"] = message.message_id
         chat_state["last_sent_text"] = None
-        chat_state["backoff_until"] = None
         should_pin = pin and chat_state.get("chat_type") in {"private", "group", "supergroup"}
         if should_pin:
             try:
@@ -176,7 +177,7 @@ async def send_and_pin_status_message(
                 logging.warning("Failed to pin message in chat %s: %s", chat_id, exc)
         logging.info("Chat %s: recreated message %s", chat_id, message.message_id)
     except RetryAfter as exc:
-        _set_backoff(chat_state, exc.retry_after, "send", chat_id)
+        logging.warning("Chat %s: retry after on send: %s", chat_id, exc.retry_after)
     except (Forbidden, BadRequest) as exc:
         logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
         disable_chat(state, chat_id)
@@ -201,13 +202,6 @@ async def send_or_edit_status_message(
     async with lock:
         snapshot_message_id = chat_state.get("message_id")
         snapshot_last_text = chat_state.get("last_sent_text")
-        snapshot_backoff = chat_state.get("backoff_until")
-
-    now = time.time()
-    if snapshot_backoff and now < snapshot_backoff:
-        remaining = max(0, int(snapshot_backoff - now))
-        logging.info("Chat %s: backoff %s sec", chat_id, remaining)
-        return
 
     if snapshot_message_id and snapshot_last_text == text:
         logging.info("Chat %s: skip unchanged", chat_id)
@@ -225,16 +219,12 @@ async def send_or_edit_status_message(
         return
 
     if not skip_rate_limit:
-        await RATE_LIMITER.wait("edit", edit_min_interval, scope=str(chat_id))
+        effective_interval = max(edit_min_interval, float(chat_state.get("edit_delay", 0.0) or 0.0))
+        await RATE_LIMITER.wait("edit", effective_interval, scope=str(chat_id))
 
     need_send_instead = False
     async with lock:
         message_id = chat_state.get("message_id")
-        current_backoff = chat_state.get("backoff_until")
-        if current_backoff and time.time() < current_backoff:
-            remaining = max(0, int(current_backoff - time.time()))
-            logging.info("Chat %s: backoff %s sec", chat_id, remaining)
-            return
         if not message_id:
             need_send_instead = True
         elif chat_state.get("last_sent_text") == text:
@@ -249,11 +239,13 @@ async def send_or_edit_status_message(
                     reply_markup=reply_markup,
                 )
                 chat_state["last_sent_text"] = text
-                chat_state["backoff_until"] = None
+                current_delay = float(chat_state.get("edit_delay", 0.0) or 0.0)
+                if current_delay > edit_min_interval:
+                    chat_state["edit_delay"] = max(edit_min_interval, current_delay - 0.5)
                 logging.info("Chat %s: edited ok", chat_id)
                 return
             except RetryAfter as exc:
-                _set_backoff(chat_state, exc.retry_after, "edit", chat_id)
+                _bump_edit_delay(chat_state, exc.retry_after, chat_id)
                 return
             except (Forbidden, BadRequest) as exc:
                 logging.warning("Chat %s: unrecoverable edit error: %s", chat_id, exc)
@@ -287,7 +279,7 @@ async def send_status_reply_message(
         )
         return message.message_id
     except RetryAfter as exc:
-        _set_backoff(chat_state, exc.retry_after, "send", chat_id)
+        logging.warning("Chat %s: retry after on send: %s", chat_id, exc.retry_after)
     except (Forbidden, BadRequest) as exc:
         logging.warning("Chat %s: unrecoverable send error: %s", chat_id, exc)
         disable_chat(state, chat_id)

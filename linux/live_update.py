@@ -25,10 +25,10 @@ def _should_pin(chat_state: Dict[str, Any]) -> bool:
 
 def get_update_interval_seconds(active_viewer_count: int) -> float:
     if active_viewer_count <= 3:
-        return 1.0
-    if active_viewer_count <= 10:
         return 2.5
-    return 4.0
+    if active_viewer_count <= 9:
+        return 4.5
+    return 5.5
 
 
 async def update_status_for_chat(
