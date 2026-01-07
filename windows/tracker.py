@@ -222,7 +222,7 @@ def get_snapshot_for_publish(tracker: Dict[str, Any]) -> Optional[Dict[str, Any]
     return tracker.get("last_snapshot")
 
 
-async def _collect_snapshot_payload() -> Dict[str, Any]:
+def _collect_snapshot_payload() -> Dict[str, Any]:
     processes = list_running_processes()
     snapshot = _detect_active_snapshot()
     running_apps = _collect_running_apps(processes)
