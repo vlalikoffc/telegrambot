@@ -1,5 +1,7 @@
 from system.plugins import PluginBase
 
+PLUGIN_API_VERSION = "1.0"
+
 
 class ExamplePlugin(PluginBase):
     name = "example"

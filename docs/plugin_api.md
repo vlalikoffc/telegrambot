@@ -1,5 +1,12 @@
 # Plugin API
 
+## Версионирование API
+
+Core-версия API объявляется как `CORE_PLUGIN_API_VERSION`. Каждый плагин обязан указать `PLUGIN_API_VERSION` на уровне модуля.
+
+- Если `PLUGIN_API_VERSION` отсутствует → плагин не загружается.
+- Если `PLUGIN_API_VERSION` не совпадает с `CORE_PLUGIN_API_VERSION` → плагин не загружается.
+
 ## PluginBase
 
 ```python
@@ -34,6 +41,20 @@ class PluginBase:
 - `render_ctx.add_line(text)` – append line
 - `render_ctx.add_section(title, lines)` – append titled section
 - `render_ctx.extend(lines)` – append multiple lines
+- `render_ctx.default_status` – read-only default status snapshot (structured data)
+
+`default_status` содержит стабильные, безопасные поля:
+
+- `uptime_seconds`
+- `local_time`
+- `active_app` (`key`, `name`, `tagline`, `uptime_seconds`, `minecraft_server`, `minecraft_client`)
+- `process_count`
+- `presence` (`state`, `idle_seconds`, `duration_seconds`)
+- `favorites` (список: `name`, `running`, `active`)
+- `work_languages`
+- `footer_text`
+- `viewer_count`
+- `update_interval_seconds`
 
 ## StatusContext
 
