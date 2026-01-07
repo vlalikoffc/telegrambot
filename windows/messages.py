@@ -36,11 +36,13 @@ class RateLimiter:
 
 RATE_LIMITER = RateLimiter()
 
+MAX_EDIT_DELAY = 5.5
+
 
 def _bump_edit_delay(chat_state: Dict[str, Any], retry_after: int, chat_id: int) -> None:
     current = float(chat_state.get("edit_delay", 0.0) or 0.0)
     boosted = max(current, retry_after + 0.5)
-    chat_state["edit_delay"] = min(boosted, 6.0)
+    chat_state["edit_delay"] = min(boosted, MAX_EDIT_DELAY)
     logging.warning("Chat %s: rate limit, edit delay %.1fs", chat_id, chat_state["edit_delay"])
 
 
@@ -220,6 +222,7 @@ async def send_or_edit_status_message(
 
     if not skip_rate_limit:
         effective_interval = max(edit_min_interval, float(chat_state.get("edit_delay", 0.0) or 0.0))
+        effective_interval = min(max(effective_interval, edit_min_interval), MAX_EDIT_DELAY)
         await RATE_LIMITER.wait("edit", effective_interval, scope=str(chat_id))
 
     need_send_instead = False
@@ -241,7 +244,9 @@ async def send_or_edit_status_message(
                 chat_state["last_sent_text"] = text
                 current_delay = float(chat_state.get("edit_delay", 0.0) or 0.0)
                 if current_delay > edit_min_interval:
-                    chat_state["edit_delay"] = max(edit_min_interval, current_delay - 0.5)
+                    chat_state["edit_delay"] = min(
+                        max(edit_min_interval, current_delay - 0.5), MAX_EDIT_DELAY
+                    )
                 logging.info("Chat %s: edited ok", chat_id)
                 return
             except RetryAfter as exc:
