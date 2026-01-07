@@ -263,6 +263,7 @@ def build_status_text(
     app_key = snapshot.get("app_key") or resolve_app_key(process_name)
     minecraft_version = snapshot.get("minecraft_version")
     minecraft_server = snapshot.get("minecraft_server")
+    minecraft_client = snapshot.get("minecraft_client")
     display_name = (
         f"Minecraft {minecraft_version}" if app_key == "minecraft" and minecraft_version else "Minecraft"
         if app_key == "minecraft"
@@ -283,6 +284,8 @@ def build_status_text(
 
     if app_key == "minecraft" and minecraft_server:
         parts.append(f"🌐 Сервер: {minecraft_server}")
+    if app_key == "minecraft" and minecraft_client:
+        parts.append(f"🧩 Client: {minecraft_client}")
 
     process_count = get_process_count()
     if process_count is not None:

@@ -2,8 +2,9 @@ import asyncio
 import ipaddress
 import logging
 import re
+import socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psutil
 
@@ -17,6 +18,14 @@ from windows import (
 )
 
 MC_VERSION_PATTERN = re.compile(r"\b(\d+\.\d+(?:\.\d+)?[a-z]?)\b")
+CLIENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("Lunar Client", re.compile(r"Lunar\s+Client(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+    ("LabyMod", re.compile(r"LabyMod(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+    ("Feather", re.compile(r"Feather(?:\s+Client)?(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+    ("Badlion", re.compile(r"Badlion(?:\s+Client)?(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+    ("Fabric Loader", re.compile(r"Fabric(?:\s+Loader)?(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+    ("Forge", re.compile(r"Forge(?:\s+v?([0-9][\w.\-]+))?", re.IGNORECASE)),
+)
 def _normalize_version(version: str) -> str:
     return re.sub(r"[a-z]+$", "", version, flags=re.IGNORECASE)
 
@@ -50,18 +59,6 @@ def _extract_mc_version(title: Optional[str]) -> Optional[str]:
     return None
 
 
-def _mask_ip(address: str) -> str:
-    try:
-        ip = ipaddress.ip_address(address)
-    except ValueError:
-        return address
-    if isinstance(ip, ipaddress.IPv4Address):
-        parts = address.split(".")
-        if len(parts) == 4:
-            return f"{parts[0]}.{parts[1]}.***.***"
-    return address
-
-
 def _minecraft_server_for_pid(pid: int) -> Optional[str]:
     try:
         proc = psutil.Process(pid)
@@ -69,6 +66,7 @@ def _minecraft_server_for_pid(pid: int) -> Optional[str]:
             if not conn.raddr:
                 continue
             host = conn.raddr.ip if hasattr(conn.raddr, "ip") else conn.raddr[0]
+            port = conn.raddr.port if hasattr(conn.raddr, "port") else conn.raddr[1]
             if not host:
                 continue
             try:
@@ -76,8 +74,13 @@ def _minecraft_server_for_pid(pid: int) -> Optional[str]:
                 if ip.is_private or ip.is_loopback:
                     return "LAN"
             except ValueError:
-                return host
-            return _mask_ip(host)
+                return f"{host}:{port}"
+            try:
+                hostname, _, _ = socket.gethostbyaddr(host)
+                host = hostname or host
+            except OSError:
+                pass
+            return f"{host}:{port}"
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return None
     except Exception:
@@ -91,6 +94,31 @@ def _detect_minecraft_title(pid: Optional[int]) -> Optional[str]:
     title = get_window_title_for_pid(pid)
     if title and "minecraft" in title.lower():
         return title
+    return None
+
+
+def _detect_minecraft_client(
+    title: Optional[str], minecraft_version: Optional[str]
+) -> Optional[str]:
+    if not title:
+        return None
+    for name, pattern in CLIENT_PATTERNS:
+        match = pattern.search(title)
+        if not match:
+            continue
+        version = match.group(1)
+        if version and minecraft_version and version == minecraft_version:
+            version = None
+        if version and minecraft_version and version.startswith("1.") and name in {
+            "Lunar Client",
+            "LabyMod",
+            "Feather",
+            "Badlion",
+        }:
+            version = None
+        if version:
+            return f"{name} {version}"
+        return name
     return None
 
 
@@ -112,6 +140,9 @@ def _detect_active_snapshot() -> Dict[str, Any]:
         title = None
 
     minecraft_version = _extract_mc_version(minecraft_title) if app_key == "minecraft" else None
+    minecraft_client = (
+        _detect_minecraft_client(minecraft_title, minecraft_version) if app_key == "minecraft" else None
+    )
     minecraft_server = _minecraft_server_for_pid(pid) if app_key == "minecraft" and pid else None
     app_uptime_seconds = get_process_uptime_seconds(create_time)
 
@@ -124,6 +155,7 @@ def _detect_active_snapshot() -> Dict[str, Any]:
         "app_uptime_seconds": app_uptime_seconds,
         "title": title,
         "minecraft_version": minecraft_version,
+        "minecraft_client": minecraft_client,
         "minecraft_server": minecraft_server,
         "tagline": resolve_tagline(app_key),
     }

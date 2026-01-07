@@ -214,6 +214,7 @@ async def handle_show_status_button(update: Update, context: ContextTypes.DEFAUL
                 "view_expire": now_ts + VIEW_DURATION_SECONDS,
                 "username": query.from_user.username if query.from_user else None,
                 "name": query.from_user.full_name if query.from_user else None,
+                "stats_date": get_local_date_string(),
             }
             record_view_event(
                 state,

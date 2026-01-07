@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Any, Dict
 
 from telegram.ext import Application
@@ -12,6 +13,7 @@ from state import (
     active_viewers,
     get_view_stats,
     prune_expired_viewers,
+    record_view_event,
     save_state,
 )
 from status import HIDDEN_STATUS_TEXT, build_status_text
@@ -21,6 +23,25 @@ from windows import get_local_date_string
 
 def _should_pin(chat_state: Dict[str, Any]) -> bool:
     return chat_state.get("chat_type") == "private"
+
+
+def _ensure_daily_stats_for_viewers(
+    state: Dict[str, Any], chat_state: Dict[str, Any], current_date: str
+) -> None:
+    viewers = chat_state.get("viewers") or {}
+    for user_id, info in viewers.items():
+        stats_date = info.get("stats_date")
+        if stats_date == current_date:
+            continue
+        record_view_event(
+            state,
+            current_date,
+            int(user_id),
+            info.get("username"),
+            info.get("name"),
+            time.time(),
+        )
+        info["stats_date"] = current_date
 
 
 def get_update_interval_seconds(active_viewer_count: int) -> float:
@@ -84,10 +105,12 @@ async def update_live_status_for_app(app: Application) -> float:
             if chat_state.get("status_visible") or chat_state.get("view_mode") != ViewMode.STATUS.value:
                 chat_state["status_visible"] = False
                 chat_state["view_mode"] = ViewMode.STATUS.value
+                chat_state["viewers"] = {}
                 hidden_updates.append((chat_id, chat_state))
             continue
 
         chat_state["status_visible"] = True
+        _ensure_daily_stats_for_viewers(state, chat_state, current_date)
         if chat_state.get("callback_in_progress"):
             logging.info(
                 "Chat %s: live-update skipped (callback in progress)", chat_id
